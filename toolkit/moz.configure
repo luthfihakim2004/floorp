@@ -4640,3 +4640,14 @@ def libmegazord_artifacts(value):
 
 
 set_config("MOZ_LIBMEGAZORD_ARTIFACTS", libmegazord_artifacts)
+
+# Native llama.cpp ML backend
+# ==============================================================
+
+option(
+    "--disable-native-llama",
+    help="Do not build the native llama.cpp ML backend",
+)
+
+set_config("MOZ_NATIVE_LLAMA", True, when="--enable-native-llama")
+set_define("MOZ_NATIVE_LLAMA", True, when="--enable-native-llama")

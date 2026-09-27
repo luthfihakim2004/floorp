@@ -11,7 +11,10 @@ DIRS += [
     "sqlite",
 ]
 
-if CONFIG["MOZ_WIDGET_TOOLKIT"] != "android":
+if (
+    CONFIG["MOZ_WIDGET_TOOLKIT"] != "android"
+    and CONFIG["MOZ_NATIVE_LLAMA"]
+):
     DIRS += ["mozinference"]
 
 if CONFIG["MOZ_USING_WASM_SANDBOXING"]:

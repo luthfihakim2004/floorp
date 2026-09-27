@@ -23,9 +23,13 @@ DIRS += [
 # process to talk to: SandboxingKind::HW_INFERENCE does not exist there.
 if CONFIG["MOZ_WIDGET_TOOLKIT"] != "android":
     DIRS += [
-        "backends/llama",
         "ipc",
     ]
+
+    if CONFIG["MOZ_NATIVE_LLAMA"]:
+        DIRS += [
+            "backends/llama",
+        ]
 
 XPCSHELL_TESTS_MANIFESTS += ["tests/xpcshell/xpcshell.toml"]
 
