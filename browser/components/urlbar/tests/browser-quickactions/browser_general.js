@@ -68,14 +68,20 @@ async function exitActionsMode() {
   });
 }
 
+const TEST_TOP_SITE = "https://example.com";
+
 add_setup(async function setup() {
   await SpecialPowers.pushPrefEnv({
     set: [
       ["test.wait300msAfterTabSwitch", true],
       ["browser.urlbar.quickactions.enabled", true],
       ["browser.urlbar.scotchBonnet.enableOverride", true],
+      ["browser.urlbar.suggest.topsites", true],
+      ["browser.newtabpage.activity-stream.default.sites", TEST_TOP_SITE],
     ],
   });
+
+  await updateTopSites(sites => sites?.length == 1);
 
   ActionsProviderQuickActions.addAction("testaction", {
     commands: ["testaction"],
@@ -647,4 +653,36 @@ add_task(async function test_label_shown() {
   await showAction(() => {
     Assert.ok(!onboardingLabelShown(window), "Onboarding label is not shown");
   });
+});
+
+add_task(async function test_query_context_supplied_without_query() {
+  let received = [];
+  let provider = new UrlbarTestUtils.TestProvider({
+    results: [],
+    onSearchSessionEnd: queryContext => received.push(queryContext),
+  });
+  let providersManager = ProvidersManager.getInstanceForSap("urlbar");
+  providersManager.registerProvider(provider);
+  registerCleanupFunction(() => providersManager.unregisterProvider(provider));
+
+  await BrowserTestUtils.withNewTab("about:blank", async browser => {
+    const url = "https://example.com/paste-and-go";
+    await SimpleTest.promiseClipboardChange(url, () =>
+      clipboardHelper.copyString(url)
+    );
+    // Paste & Go on a tab whose urlbar never ran a query: no session in
+    // progress and nothing cached, which is the state bug 1886140 reproduces.
+    gURLBar.controller.engagementEvent.discard();
+    gURLBar.parentController.clearLastQueryContextCache();
+
+    let loaded = BrowserTestUtils.browserLoaded(browser, false, url);
+    await UrlbarTestUtils.activateContextMenuItem(window, "paste-and-go");
+    await loaded;
+  });
+
+  Assert.greater(received.length, 0, "onSearchSessionEnd ran");
+  Assert.ok(
+    received.every(context => !!context),
+    "Every onSearchSessionEnd got a query context"
+  );
 });
