@@ -12,7 +12,6 @@
 #include <stdint.h>
 
 #include "HTMLLinkElement.h"
-#include "Link.h"
 #include "MediaList.h"
 #include "mozAutoDocUpdate.h"
 #include "mozilla/Components.h"
@@ -30,6 +29,7 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/HTMLDNSPrefetch.h"
+#include "mozilla/dom/Link.h"
 #include "mozilla/dom/LinkStyle.h"
 #include "mozilla/dom/ModuleLoader.h"
 #include "mozilla/dom/MutationObservers.h"
@@ -967,6 +967,15 @@ void nsContentSink::NotifyDocElementCreated(Document* aDoc) {
 
   // This process just created a document. Ensure it's been marked as untrusted.
   mozilla::dom::ContentChild::MaybeBecomeUntrusted();
+
+  // Data documents with a content principal (DOMParser, XHR responseXML,
+  // createDocument) are never displayed, cannot run scripts and have no
+  // window. None of the observers of these notifications act on them, so
+  // skip the notification overhead. Only CustomElementListener with
+  // SystemPrincipals actually make use of this.
+  if (aDoc->IsLoadedAsData() && !aDoc->NodePrincipal()->IsSystemPrincipal()) {
+    return;
+  }
 
   nsCOMPtr<nsIObserverService> observerService =
       mozilla::services::GetObserverService();

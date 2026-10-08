@@ -271,6 +271,7 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
 
   void SetPresContext(nsPresContext* aPresContext);
   void ClearFrameRefs(nsIFrame* aFrame);
+  void MaybeLeavePendingLink(bool aWasCanceled);
 
   nsIFrame* GetEventTarget();
   nsIContent* GetExplicitEventTargetContent(const WidgetEvent* = nullptr);
@@ -1336,6 +1337,11 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
   void RemoveNodeFromChainIfNeeded(ElementState aState,
                                    nsIContent* aContentRemoved, bool aNotify);
 
+  // Tells the hovered document's speculation rules that the deepest hovered
+  // node is about to become aNewHover, so that it can start or cancel the
+  // hover delay for a moderate eagerness prefetch.
+  void NotifySpeculationRulesOfHover(nsIContent* aNewHover);
+
   [[nodiscard]] bool IsEventOutsideDragThreshold(
       const WidgetInputEvent& aEvent) const;
 
@@ -1471,6 +1477,7 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
   // The primary frame of the link currently shown in the status bar.
   // Checked in ClearFrameRefs to avoid stalling link status bar.
   WeakFrame mLinkOverFrame;
+  RefPtr<dom::Element> mPendingLeaveLinkElement;
 
   nsPresContext* mPresContext;      // Not refcnted
   RefPtr<dom::Document> mDocument;  // Doesn't necessarily need to be owner

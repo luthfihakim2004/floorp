@@ -21,7 +21,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
 
 ChromeUtils.defineLazyGetter(lazy, "logConsole", () =>
   console.createInstance({
-    prefix: "IPPEnterpriseAuthProvider",
+    prefix: "IPP_EnterpriseAuthProvider",
     maxLogLevel: Services.prefs.getBoolPref("browser.ipProtection.log", false)
       ? "Debug"
       : "Warn",
@@ -114,15 +114,22 @@ class IPPEnterpriseAuthProviderSingleton extends IPPAuthProvider {
    */
   async fetchProxyPass(abortSignal = null) {
     using tokenHandle = await this.getToken(abortSignal);
-    const response = await fetch(this.#tokenURL, {
-      method: "GET",
-      cache: "no-cache",
-      headers: {
-        Authorization: `Bearer ${tokenHandle.token}`,
-        "Content-Type": "application/json",
-      },
-      signal: abortSignal,
-    });
+    let response;
+    try {
+      response = await fetch(this.#tokenURL, {
+        method: "GET",
+        cache: "no-cache",
+        headers: {
+          Authorization: `Bearer ${tokenHandle.token}`,
+          "Content-Type": "application/json",
+        },
+        signal: abortSignal,
+      });
+    } catch (error) {
+      abortSignal?.throwIfAborted();
+      lazy.logConsole.error("Proxy pass fetch failed:", error);
+      return { error: AUTH_ERRORS.NETWORK_ERROR, usage: null };
+    }
     if (!response) {
       return { error: AUTH_ERRORS.LOGIN_NEEDED, usage: null };
     }

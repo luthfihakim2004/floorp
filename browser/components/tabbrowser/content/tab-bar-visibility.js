@@ -8,7 +8,8 @@ var TabBarVisibility = {
   update(force = false) {
     let isPopup = !window.toolbar.visible;
     let isTaskbarTab = document.documentElement.hasAttribute("taskbartab");
-    let isSingleTabWindow = isPopup || isTaskbarTab;
+    let isMiniWindow = document.documentElement.hasAttribute("mini-window");
+    let isSingleTabWindow = isPopup || isTaskbarTab || isMiniWindow;
 
     let hasVerticalTabs =
       !isSingleTabWindow &&
@@ -31,14 +32,20 @@ var TabBarVisibility = {
     // Update the browser chrome.
 
     let tabsToolbar = document.getElementById("TabsToolbar");
-    let navbar = document.getElementById("nav-bar");
 
     gNavToolbox.toggleAttribute("tabs-hidden", hideTabsToolbar);
-    // Should the nav-bar look and function like a titlebar?
-    navbar.classList.toggle(
-      "browser-titlebar",
-      CustomTitlebar.enabled && hideTabsToolbar
-    );
+    // Should the nav-bar and the toolbars underneath it look and function like
+    // a titlebar? When the tabs toolbar is hidden they form the top edge of the
+    // window, so they share the titlebar's background and inactive styling.
+    let isTitlebar = CustomTitlebar.enabled && hideTabsToolbar;
+    let titlebarIds = Services.prefs.getBoolPref("browser.nova.enabled")
+      ? ["nav-bar", "PersonalToolbar"]
+      : ["nav-bar"];
+    for (let id of titlebarIds) {
+      document
+        .getElementById(id)
+        .classList.toggle("browser-titlebar", isTitlebar);
+    }
 
     if (
       hideTabsToolbar == tabsToolbar.collapsed &&

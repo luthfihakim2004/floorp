@@ -256,6 +256,22 @@ nsIFrame* SVGGeometryFrame::GetFrameForPoint(const gfxPoint& aPoint) {
   return nullptr;
 }
 
+bool SVGGeometryFrame::ComputeCustomOverflow(OverflowAreas& aOverflowAreas) {
+  if (!StyleSVG()->mStroke.kind.IsNone()) {
+    // Stroke geometry is included in our overflow rect, nothing to do.
+    return true;
+  }
+  // We might need to hit test the stroke, so need to track that as
+  // ink-overflow.
+  float inkOverflowInflation = SVGUtils::GetStrokeWidth(
+      this, SVGContextPaint::GetContextPaint(GetContent()));
+  if (inkOverflowInflation > 0.0f) {
+    aOverflowAreas.InkOverflow().Inflate(
+        CSSPixel::ToAppUnits(inkOverflowInflation));
+  }
+  return true;
+}
+
 void SVGGeometryFrame::ReflowSVG() {
   NS_ASSERTION(SVGUtils::OuterSVGIsCallingReflowSVG(this),
                "This call is probably a wasteful mistake");
@@ -267,26 +283,16 @@ void SVGGeometryFrame::ReflowSVG() {
     return;
   }
 
+  // Speed is more important than accuracy here - we don't care if the stroke
+  // bounds are slightly too large so we set EstimateStrokeBounds.
   SVGBBoxFlags flags = {SVGBBoxFlag::IncludeFillGeometry,
-                        SVGBBoxFlag::IncludeStroke,
-                        SVGBBoxFlag::IncludeMarkers};
-
-  // Our "visual" overflow rect needs to be valid for building display lists
-  // for hit testing, which means that for certain values of 'pointer-events'
-  // it needs to include the geometry of the fill or stroke even when the fill/
-  // stroke don't actually render (e.g. when stroke="none" or
-  // stroke-opacity="0"). GetGeometryHitTestFlags() accounts for
-  // 'pointer-events'.
-  SVGHitTestFlags hitTestFlags = SVGUtils::GetGeometryHitTestFlags(this);
-  if (hitTestFlags.contains(SVGHitTestFlag::Fill)) {
-    flags += SVGBBoxFlag::IncludeFillGeometry;
-  }
-  if (hitTestFlags.contains(SVGHitTestFlag::Stroke)) {
+                        SVGBBoxFlag::IncludeStroke, SVGBBoxFlag::IncludeMarkers,
+                        SVGBBoxFlag::EstimateStrokeBounds};
+  if (!StyleSVG()->mStroke.kind.IsNone()) {
     flags += SVGBBoxFlag::IncludeStrokeGeometry;
   }
-
-  SVGBBox extent = GetBBoxContribution({}, flags).ToThebesRect();
-  mRect = nsLayoutUtils::RoundGfxRectToAppRect((const Rect&)extent,
+  SVGBBox extent = GetBBoxContribution({}, flags);
+  mRect = nsLayoutUtils::RoundGfxRectToAppRect(extent.ToThebesRect(),
                                                AppUnitsPerCSSPixel());
 
   if (HasAnyStateBits(NS_FRAME_FIRST_REFLOW)) {
@@ -296,8 +302,9 @@ void SVGGeometryFrame::ReflowSVG() {
     SVGObserverUtils::UpdateEffects(this);
   }
 
-  nsRect overflow = nsRect(nsPoint(0, 0), mRect.Size());
-  OverflowAreas overflowAreas(overflow, overflow);
+  const nsRect overflowRect(nsPoint(), mRect.Size());
+  OverflowAreas overflowAreas(overflowRect, overflowRect);
+  ComputeCustomOverflow(overflowAreas);
   FinishAndStoreOverflow(overflowAreas, mRect.Size());
 
   RemoveStateBits(NS_FRAME_FIRST_REFLOW | NS_FRAME_IS_DIRTY |
@@ -331,15 +338,15 @@ void SVGGeometryFrame::NotifySVGChanged(ChangeFlags aFlags) {
   if (aFlags.contains(ChangeFlag::CoordContextChanged)) {
     auto* geom = static_cast<SVGGeometryElement*>(GetContent());
     // Stroke currently contributes to our mRect, which is why we have to take
-    // account of stroke-width here. Note that we do not need to take account
-    // of stroke-dashoffset since, although that can have a percentage value
-    // that is resolved against our coordinate context, it does not affect our
-    // mRect.
-    const auto& strokeWidth = StyleSVG()->mStrokeWidth;
-    if (geom->GeometryDependsOnCoordCtx() ||
-        (strokeWidth.IsLengthPercentage() &&
-         strokeWidth.AsLengthPercentage().HasPercent())) {
+    // account of stroke-width here.
+    if (geom->GeometryDependsOnCoordCtx()) {
       geom->ClearAnyCachedPath();
+      SVGUtils::ScheduleReflowSVG(this);
+    } else if (SVGContentUtils::HasPercentageDependentStroke(
+                   Style(), SVGContextPaint::GetContextPaint(geom)) ||
+               (StyleSVG()->HasMarker() && geom->IsMarkable()) ||
+               SVGIntegrationUtils::UsingEffectsForFrame(this)) {
+      // Stroke, effects and markers may have percentage dependent units.
       SVGUtils::ScheduleReflowSVG(this);
     }
   }
@@ -412,6 +419,9 @@ SVGBBox SVGGeometryFrame::GetBBoxContribution(const Matrix& aToBBoxUserspace,
   Maybe<Rect> simpleBounds;
   if (getStroke && userToOuterSVG) {
     Matrix m = ToMatrix(*userToOuterSVG);
+    if (m.IsSingular()) {
+      return bbox;
+    }
     simpleBounds =
         element->GetGeometryBounds(strokeOptions, aToBBoxUserspace, &m);
   } else if (getFill || getStroke) {
@@ -445,7 +455,8 @@ SVGBBox SVGGeometryFrame::GetBBoxContribution(const Matrix& aToBBoxUserspace,
       //   stroke bounds that it will return will be empty.
 
       Maybe<Rect> strokeBBoxExtents;
-      if (StaticPrefs::svg_Moz2D_strokeBounds_enabled()) {
+      if (!aFlags.contains(SVGBBoxFlag::EstimateStrokeBounds) &&
+          StaticPrefs::svg_Moz2D_strokeBounds_enabled()) {
         if (userToOuterSVG) {
           Matrix m = ToMatrix(*userToOuterSVG);
           Matrix outerSVGToBBox = aToBBoxUserspace * m.Inverse();
@@ -675,7 +686,7 @@ bool SVGGeometryFrame::IsInvisible() const {
   return true;
 }
 
-bool SVGGeometryFrame::CreateWebRenderCommands(
+WebRenderCommandsResult SVGGeometryFrame::CreateWebRenderCommands(
     mozilla::wr::DisplayListBuilder& aBuilder,
     mozilla::wr::IpcResourceUpdateQueue& aResources,
     const mozilla::layers::StackingContextHelper& aSc,
@@ -690,35 +701,35 @@ bool SVGGeometryFrame::CreateWebRenderCommands(
   element->GetAsSimplePath(&simplePath);
 
   if (!simplePath.IsRect()) {
-    return false;
+    return Err("path is not a simple rect");
   }
 
   const nsStyleSVG* style = StyleSVG();
   MOZ_ASSERT(style);
 
   if (!style->mFill.kind.IsColor()) {
-    return false;
+    return Err("fill is not a plain color");
   }
 
   switch (style->mFill.kind.tag) {
     case StyleSVGPaintKind::Tag::Color:
       break;
     default:
-      return false;
+      return Err("fill is not a plain color");
   }
 
   if (!style->mStroke.kind.IsNone()) {
-    return false;
+    return Err("stroke is not supported");
   }
 
   if (StyleEffects()->HasMixBlendMode()) {
     // FIXME: not implemented
-    return false;
+    return Err("mix-blend-mode is not supported");
   }
 
   if (style->HasMarker() && element->IsMarkable()) {
     // Markers aren't suppported yet.
-    return false;
+    return Err("markers are not supported");
   }
 
   if (!aDryRun) {
@@ -755,7 +766,7 @@ bool SVGGeometryFrame::CreateWebRenderCommands(
                       color);
   }
 
-  return true;
+  return Ok();
 }
 
 void SVGGeometryFrame::PaintMarkers(gfxContext& aContext,

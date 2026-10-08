@@ -872,15 +872,11 @@ urlbar-searchmode-no-keyword2 =
     .title = Keyword search is disabled
 
 urlbar-searchmode-dropmarker2 =
-    .title = Pick a Search Engine
-urlbar-searchmode-bookmarks3 = Bookmarks
-    .accesskey = B
-urlbar-searchmode-tabs3 = Tabs
-    .accesskey = T
-urlbar-searchmode-history3 = History
-    .accesskey = H
-urlbar-searchmode-actions3 = Actions
-    .accesskey = A
+    .title = Pick a search engine
+urlbar-searchmode-bookmarks4 = Bookmarks
+urlbar-searchmode-tabs4 = Tabs
+urlbar-searchmode-history4 = History
+urlbar-searchmode-actions4 = Actions
 urlbar-searchmode-exit-button2 =
     .title = Close
 urlbar-searchmode-default2 =
@@ -898,10 +894,8 @@ urlbar-searchmode-popup-one-off-header = This time search with:
 # Label shown on the top of Searchmode Switcher popup when the search engine won't automatically
 # reset after submitting.
 urlbar-searchmode-popup-header = Search with:
-urlbar-searchmode-popup-search-settings = Search Settings
-    .accesskey = S
-urlbar-searchmode-popup-settings = Settings
-    .accesskey = S
+urlbar-searchmode-popup-search-settings2 = Search Settings
+urlbar-searchmode-popup-settings2 = Settings
 
 # Label prompting user to search with a particular search engine.
 #  $engine (String): the name of a search engine that searches a specific site
@@ -934,20 +928,16 @@ urlbar-result-action-switch-to-tabgroup = Switch to { $group }
 #  $group (String): the name of the tab group to re-open
 urlbar-result-action-open-saved-tabgroup = Open { $group }
 
-## Used in the context menu in urlbar view.
+## Used in the menu of a urlbar result.
 
-urlbar-view-context-menu-open-in-tab =
-  .label = Open in New Tab
-  .accesskey = w
-urlbar-view-context-menu-open-in-container-tab =
-  .label = Open in New Container Tab
-  .accesskey = i
-urlbar-view-context-menu-open-in-window =
-  .label = Open in New Window
-  .accesskey = N
-urlbar-view-context-menu-open-in-private-window =
-  .label = Open in New Private Window
-  .accesskey = P
+urlbar-view-context-menu-open-in-tab2 = Open in New Tab
+    .accesskey = w
+urlbar-view-context-menu-open-in-container-tab2 = Open in New Container Tab
+    .accesskey = i
+urlbar-view-context-menu-open-in-window2 = Open in New Window
+    .accesskey = N
+urlbar-view-context-menu-open-in-private-window2 = Open in New Private Window
+    .accesskey = P
 
 ## Labels shown above groups of urlbar results
 

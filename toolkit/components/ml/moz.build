@@ -14,7 +14,6 @@ with Files("**"):
 
 DIRS += [
     "actors",
-    "security",
     "tests",
 ]
 
@@ -23,13 +22,9 @@ DIRS += [
 # process to talk to: SandboxingKind::HW_INFERENCE does not exist there.
 if CONFIG["MOZ_WIDGET_TOOLKIT"] != "android":
     DIRS += [
+        "backends/llama",
         "ipc",
     ]
-
-    if CONFIG["MOZ_NATIVE_LLAMA"]:
-        DIRS += [
-            "backends/llama",
-        ]
 
 XPCSHELL_TESTS_MANIFESTS += ["tests/xpcshell/xpcshell.toml"]
 
@@ -77,3 +72,14 @@ XPIDL_MODULE = "ml"
 include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"
+
+LICENSED_UNDER += ["apache"]
+LICENSED_UNDER["apache"].paths = [
+    "vendor/openai/dist/openai.mjs",
+    "vendor/transformers.js",
+]
+if CONFIG["NIGHTLY_BUILD"]:
+    LICENSED_UNDER["apache"].paths += [
+        "vendor/openai/dist/openai-dev.mjs",
+        "vendor/transformers-dev.js",
+    ]

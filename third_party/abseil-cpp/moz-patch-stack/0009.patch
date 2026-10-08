@@ -1,53 +1,57 @@
-From: Michael Froman <mfroman@mozilla.com>
-Date: Thu, 16 Jan 2025 11:29:00 -0600
-Subject: Bug 1935474 - don't demangle rust symbols. r?ng!
+From: Ryan VanderMeulen <rvandermeulen@mozilla.com>
+Date: Mon, 05 Oct 2026 09:49:04 -0400
+Subject: Bug 2068902 - Use __builtin_prefetch for absl::PrefetchToLocalCacheForWrite on x86-64.
 
-Building demangle.cc causes errors in our hazard-linux64-haz/debug build.
-For now, we'll avoid calling DemangleRustSymbolEncoding, and skip building
-demangle.cc.
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/828151aa9455ccbfe45787bbe00127813c97cc9e
+The prefetchw fallbacks assume CPUs lacking PRFCHW treat the opcode as a no-op. 64-bit NetBurst CPUs
+(Pentium 4 / Xeon family 15) raise #UD instead. Let the compiler pick the instruction: prefetcht0 by
+default, prefetchw when the target guarantees it.
 ---
- abseil-cpp/absl/debugging/BUILD.gn             | 4 ++++
- abseil-cpp/absl/debugging/internal/demangle.cc | 4 ++++
- 2 files changed, 8 insertions(+)
+ abseil-cpp/absl/base/prefetch.h | 20 +++++---------------
+ 1 file changed, 5 insertions(+), 15 deletions(-)
 
-diff --git a/abseil-cpp/absl/debugging/BUILD.gn b/abseil-cpp/absl/debugging/BUILD.gn
-index f223cdb507a..48643241e37 100644
---- a/abseil-cpp/absl/debugging/BUILD.gn
-+++ b/abseil-cpp/absl/debugging/BUILD.gn
-@@ -191,6 +191,9 @@ absl_test("decode_rust_punycode_test") {
+diff --git a/abseil-cpp/absl/base/prefetch.h b/abseil-cpp/absl/base/prefetch.h
+index 482cde3a0166..96ee28d3e6a3 100644
+--- a/abseil-cpp/absl/base/prefetch.h
++++ b/abseil-cpp/absl/base/prefetch.h
+@@ -117,7 +117,9 @@ void PrefetchToLocalCacheNta(const void* addr);
+ // This function is similar to `PrefetchToLocalCache()` except that it
+ // prefetches cachelines with an 'intent to modify' This typically includes
+ // invalidating cache entries for this address in all other cache tiers, and an
+-// exclusive access intent.
++// exclusive access intent. On targets where the compiler cannot assume a
++// write-prefetch instruction (e.g. x86-64 without PRFCHW), this is equivalent
++// to `PrefetchToLocalCache()`.
+ //
+ // Incorrect or gratuitous use of this function can degrade performance. As this
+ // function can invalidate cached cachelines on other caches and computer cores,
+@@ -154,15 +156,7 @@ ABSL_ATTRIBUTE_ALWAYS_INLINE inline void PrefetchToLocalCacheNta(
+ 
+ ABSL_ATTRIBUTE_ALWAYS_INLINE inline void PrefetchToLocalCacheForWrite(
+     const void* addr) {
+-  // [x86] gcc/clang don't generate PREFETCHW for __builtin_prefetch(.., 1)
+-  // unless -march=broadwell or newer; this is not generally the default, so we
+-  // manually emit prefetchw. PREFETCHW is recognized as a no-op on older Intel
+-  // processors and has been present on AMD processors since the K6-2.
+-#if defined(__x86_64__) && !defined(__PRFCHW__)
+-  asm("prefetchw %0" : : "m"(*reinterpret_cast<const char*>(addr)));
+-#else
+   __builtin_prefetch(addr, 1, 3);
+-#endif
  }
  
- absl_source_set("demangle_rust") {
-+# hazard-linux64-haz/debug builds fail when this section is
-+# included in the build.
-+if (!moz_webrtc_build) {
-   sources = [ "internal/demangle_rust.cc" ]
-   public = [ "internal/demangle_rust.h" ]
-   deps = [
-@@ -199,6 +202,7 @@ absl_source_set("demangle_rust") {
-     "//third_party/abseil-cpp/absl/base:core_headers",
-   ]
+ #elif defined(ABSL_INTERNAL_HAVE_SSE)
+@@ -183,12 +177,8 @@ ABSL_ATTRIBUTE_ALWAYS_INLINE inline void PrefetchToLocalCacheForWrite(
+     const void* addr) {
+ #if defined(_MM_HINT_ET0)
+   _mm_prefetch(reinterpret_cast<const char*>(addr), _MM_HINT_ET0);
+-#elif !defined(_MSC_VER) && defined(__x86_64__)
+-  // _MM_HINT_ET0 is not universally supported. As we commented further
+-  // up, PREFETCHW is recognized as a no-op on older Intel processors
+-  // and has been present on AMD processors since the K6-2. We have this
+-  // disabled for MSVC compilers as this miscompiles on older MSVC compilers.
+-  asm("prefetchw %0" : : "m"(*reinterpret_cast<const char*>(addr)));
++#else
++  _mm_prefetch(reinterpret_cast<const char*>(addr), _MM_HINT_T0);
+ #endif
  }
-+}
  
- absl_test("demangle_rust_test") {
-   sources = [ "internal/demangle_rust_test.cc" ]
-diff --git a/abseil-cpp/absl/debugging/internal/demangle.cc b/abseil-cpp/absl/debugging/internal/demangle.cc
-index a8d75116adc..10adcf79c84 100644
---- a/abseil-cpp/absl/debugging/internal/demangle.cc
-+++ b/abseil-cpp/absl/debugging/internal/demangle.cc
-@@ -2927,9 +2927,13 @@ static bool Overflowed(const State *state) {
- 
- // The demangler entry point.
- bool Demangle(const char* mangled, char* out, size_t out_size) {
-+// mozilla - hazard-linux64-haz/debug failure when demangle_rust.cc is
-+// included in the build.  For now we'll avoid this code.
-+#if 0
-   if (mangled[0] == '_' && mangled[1] == 'R') {
-     return DemangleRustSymbolEncoding(mangled, out, out_size);
-   }
-+#endif
- 
-   State state;
-   InitState(&state, mangled, out, out_size);

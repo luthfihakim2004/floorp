@@ -657,13 +657,17 @@ function _maybeSynthesizeDragOver(left, top, aEvent, aWindow) {
  * @property {boolean} [isWidgetEventSynthesized] - Controls WidgetMouseEvent.mReason value.
  * @property {boolean} [metaKey] - If set to `true`, the Meta key will
  *     be considered pressed.
+ * @property {number} [movementX] - Raw movement delta, standing in for the delta a
+ *     platform widget reports while the native pointer is locked. Must be specified
+ *     together with `movementY`.
+ * @property {number} [movementY] - See `movementX`.
  * @property {number} [pressure=0] - Touch input pressure (0.0 -> 1.0).
  * @property {boolean} [shiftKey] - If set to `true`, the Shift key will
  *     be considered pressed.
  * @property {string} [type] - Event type to synthesize. If not specified
  *     a `mousedown` followed by a `mouseup` are performed.
  *
- * @see nsIDOMWindowUtils.sendMouseEvent
+ * @see SynthesizeMouseEventData defined in Window.webidl
  */
 
 /**
@@ -793,6 +797,8 @@ function synthesizeMouseAtPoint(
           modifiers,
           pressure: aEvent.pressure,
           inputSource,
+          movementX: aEvent.movementX,
+          movementY: aEvent.movementY,
         },
         {
           isDOMEventSynthesized,
@@ -814,6 +820,8 @@ function synthesizeMouseAtPoint(
           modifiers,
           pressure: aEvent.pressure,
           inputSource,
+          movementX: aEvent.movementX,
+          movementY: aEvent.movementY,
         },
         {
           isDOMEventSynthesized,
@@ -834,6 +842,8 @@ function synthesizeMouseAtPoint(
           modifiers,
           pressure: aEvent.pressure,
           inputSource,
+          movementX: aEvent.movementX,
+          movementY: aEvent.movementY,
         },
         {
           isDOMEventSynthesized,
@@ -1810,7 +1820,7 @@ function synthesizeAndWaitNativeMouseMove(
  * @param {number} [aEvent.repeat]
  *        If you emulate auto-repeat, you should set the count of repeat.
  *        This method will automatically synthesize keydown (and keypress).
- * @param {*} aEvent.location
+ * @param {any} aEvent.location
  *        If you want to specify this, you can specify this explicitly.
  *        However, if you don't specify this value, it will be computed
  *        from code value.
@@ -3468,7 +3478,7 @@ function synthesizeDragOver(
  * Emulate the drop event and mouseup event.
  * This should be called after synthesizeDragOver.
  *
- * @param {*} aResult
+ * @param {any} aResult
  *        The first element of the array returned from ``synthesizeDragOver``.
  * @param {DataTransfer} aDataTransfer
  *        The second element of the array returned from ``synthesizeDragOver``.

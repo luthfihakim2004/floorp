@@ -685,6 +685,13 @@ nsresult nsHttpChannel::PrepareToConnect() {
                     }
                     return;
                   }
+                  if (!self->mDictDecompress) {
+                    // The request already completed and released the dictionary
+                    // (SetDecompressDictionary(nullptr) from the compress
+                    // converter's OnStopRequest) before this async prefetch
+                    // callback ran. Nothing left to resume.
+                    return;
+                  }
                   MOZ_ASSERT(self->mDictDecompress->DictionaryReady());
                   if (self->mSuspendedForDictionary) {
                     LOG(
@@ -1243,7 +1250,9 @@ nsresult nsHttpChannel::ContinueOnBeforeConnect(bool aShouldUpgrade,
   mConnectionInfo->SetTRRMode(nsIRequest::GetTRRMode());
   mConnectionInfo->SetIPv4Disabled(mCaps & NS_HTTP_DISABLE_IPV4);
   mConnectionInfo->SetIPv6Disabled(mCaps & NS_HTTP_DISABLE_IPV6);
-  mConnectionInfo->SetHttp3Disabled(mCaps & NS_HTTP_DISALLOW_HTTP3);
+  mConnectionInfo->SetHttp3Policy((mCaps & NS_HTTP_DISALLOW_HTTP3)
+                                      ? Http3Policy::Disabled
+                                      : Http3Policy::Allowed);
   mConnectionInfo->SetAnonymousAllowClientCert(
       (mLoadFlags & LOAD_ANONYMOUS_ALLOW_CLIENT_CERT) != 0);
 
@@ -1331,13 +1340,6 @@ nsresult nsHttpChannel::HandleOverrideResponse() {
   rv = mOverrideResponse->VisitResponseHeaders(&visitor);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  if (WillRedirect(*mResponseHead)) {
-    // TODO: Bug 759040 - We should call HandleAsyncRedirect directly here,
-    // to avoid event dispatching latency.
-    LOG(("Skipping read of overridden response redirect entity\n"));
-    return AsyncCall(&nsHttpChannel::HandleAsyncRedirect);
-  }
-
   // This block parses the cookie header, collects any cookie changes,
   // and sends them to the parent actor.
   {
@@ -1374,6 +1376,13 @@ nsresult nsHttpChannel::HandleOverrideResponse() {
 
   if ((statusCode < 500) && (statusCode != 421)) {
     ProcessAltService();
+  }
+
+  if (WillRedirect(*mResponseHead)) {
+    // TODO: Bug 759040 - We should call HandleAsyncRedirect directly here,
+    // to avoid event dispatching latency.
+    LOG(("Skipping read of overridden response redirect entity\n"));
+    return AsyncCall(&nsHttpChannel::HandleAsyncRedirect);
   }
 
   nsAutoCString body;
@@ -2204,6 +2213,7 @@ nsresult nsHttpChannel::InitTransaction() {
 
   HttpTrafficCategory category = CreateTrafficCategory();
   mTransaction->SetIsForWebTransport(!!mWebTransportSessionEventListener);
+  mTransaction->SetRequestBodyIsStreaming(LoadUploadStreamIsStreaming());
 
   RefPtr<mozilla::dom::BrowsingContext> bc;
   mLoadInfo->GetBrowsingContext(getter_AddRefs(bc));
@@ -3499,6 +3509,15 @@ nsresult nsHttpChannel::ContinueProcessResponse3(nsresult rv) {
         // It's up to the consumer to re-try w/o setting a custom
         // auth header if cached credentials should be attempted.
         rv = NS_ERROR_FAILURE;
+      } else if (httpStatus == 401 && LoadUploadStreamIsStreaming() &&
+                 !(mLoadFlags & LOAD_ANONYMOUS)) {
+        // A body whose source is null cannot be resubmitted with credentials,
+        // so this is a network error rather than an auth prompt. Ahead of the
+        // frame-ancestor check, which would still deliver the 401. Still too
+        // broad for mode "cors" with credentials "include", which the channel
+        // cannot tell apart from the cases the spec fails here.
+        // https://fetch.spec.whatwg.org/#concept-http-network-or-cache-fetch
+        rv = NS_ERROR_NET_BODY_NOT_REPLAYABLE;
       } else if (httpStatus == 401 &&
                  !nsContentSecurityUtils::CheckCSPFrameAncestorAndXFO(this)) {
         // CSP Frame Ancestor and X-Frame-Options check has failed
@@ -3543,7 +3562,8 @@ nsresult nsHttpChannel::ContinueProcessResponse3(nsresult rv) {
         if (mTransaction && mTransaction->ProxyConnectFailed()) {
           return ProcessFailedProxyConnect(httpStatus);
         }
-        if (rv == NS_ERROR_BASIC_HTTP_AUTH_DISABLED) {
+        if (rv == NS_ERROR_BASIC_HTTP_AUTH_DISABLED ||
+            rv == NS_ERROR_NET_BODY_NOT_REPLAYABLE) {
           mStatus = rv;
         }
         rv = ProcessNormal();
@@ -4861,15 +4881,16 @@ void nsHttpChannel::MaybeGenerateNELReport() {
 
   nsAutoCString endpointURL;
   ReportingHeader::GetEndpointForReportIncludeSubdomains(
-      group, channelPrincipal, /* includeSubdomains */ true, endpointURL);
+      NS_ConvertUTF16toUTF8(group), channelPrincipal,
+      /* includeSubdomains */ true, endpointURL);
   if (endpointURL.IsEmpty()) {
     return;
   }
 
   ReportDeliver::ReportData data;
-  data.mType = u"network-error"_ns;
-  data.mGroupName = std::move(group);
-  data.mURL = std::move(url);
+  data.mType = "network-error"_ns;
+  data.mGroupName = NS_ConvertUTF16toUTF8(group);
+  data.mURL = NS_ConvertUTF16toUTF8(url);
   data.mFailures = 0;
   data.mCreationTime = TimeStamp::Now();
 
@@ -4880,7 +4901,7 @@ void nsHttpChannel::MaybeGenerateNELReport() {
   // XXX(valentin): Should this be the potentially user set value of the header
   // or the current value of user_agent from http handler?
   (void)mRequestHead.GetHeader(nsHttp::User_Agent, userAgent);
-  data.mUserAgent = NS_ConvertUTF8toUTF16(userAgent);
+  data.mUserAgent = std::move(userAgent);
 
   // Enqueue the report to be delivered by the reporting API
   ReportDeliver::Fetch(data);
@@ -6156,8 +6177,10 @@ void nsHttpChannel::CloseCacheEntry(bool doomOnFailure) {
     mCacheEntry->AsyncDoom(nullptr);
   } else {
     // Store updated security info, makes cached EV status race less likely
-    // (see bug 1040086)
-    if (mSecurityInfo) {
+    // (see bug 1040086). On a plain cache hit ReadFromCache() adopted the info
+    // this very entry handed us in OpenCacheInputStream(), so storing it back
+    // would only re-serialize the certificate chain and rewrite the entry file.
+    if (mSecurityInfo && mSecurityInfo != mCachedSecurityInfo) {
       mCacheEntry->SetSecurityInfo(mSecurityInfo);
     }
 
@@ -6515,8 +6538,9 @@ bool nsHttpChannel::ParseDictionary(nsICacheEntry* aEntry,
     uint32_t expTime = 0;
     (void)GetCacheTokenExpirationTime(&expTime);
 
+    RefPtr<LoadContextInfo> lci = GetLoadContextInfo(this);
     dicts->AddEntry(mURI, key, matchVal, matchDestItems, matchIdVal, Some(hash),
-                    aModified, expTime, getter_AddRefs(mDictSaving));
+                    aModified, expTime, lci, getter_AddRefs(mDictSaving));
     // If this was 304 Not Modified, then we don't need the dictionary data
     // (though we may update the dictionary entry if the match/id/etc changed).
     // If this is 304, mDictSaving will be cleared by AddEntry.
@@ -6736,7 +6760,8 @@ nsresult nsHttpChannel::DoInstallCacheListener(bool aSaveDecompressed,
              LoadHasAppliedConversion(), this));
         MOZ_DIAGNOSTIC_ASSERT(false, "Can't save dictionary uncompressed");
         mCacheEntry->SetDictionary(nullptr);
-        DictionaryCache::RemoveDictionary(nsCString(mDictSaving->GetURI()));
+        DictionaryCache::RemoveDictionary(nsCString(mDictSaving->GetURI()),
+                                          mDictSaving->GetLoadContextInfo());
         mDictSaving = nullptr;
       }
     }
@@ -8513,14 +8538,23 @@ void nsHttpChannel::MaybeStartDNSPrefetch() {
                                         });
     }
 
-    // Issue per-family prefetches (A and AAAA) so Happy Eyeballs can reuse
-    // them instead of starting its own lookups. Skip a family that won't be
-    // queried; with IPv6 disabled the AAAA request collapses to A, so skip it
-    // to avoid a duplicate.
-    bool skipIPv4 = mCaps & NS_HTTP_DISABLE_IPV4;
-    bool skipIPv6 = (mCaps & NS_HTTP_DISABLE_IPV6) ||
-                    StaticPrefs::network_dns_disableIPv6();
-    (void)mDNSPrefetch->PrefetchHighPerFamily(dnsFlags, skipIPv4, skipIPv6);
+    if (StaticPrefs::network_http_happy_eyeballs_enabled()) {
+      // Happy Eyeballs connects per-family, so issue per-family prefetches
+      // (A and AAAA) that it can reuse instead of starting its own lookups.
+      // Skip a family that won't be queried; with IPv6 disabled the AAAA
+      // request collapses to A, so skip it to avoid a duplicate.
+      bool skipIPv4 = mCaps & NS_HTTP_DISABLE_IPV4;
+      bool skipIPv6 = (mCaps & NS_HTTP_DISABLE_IPV6) ||
+                      StaticPrefs::network_dns_disableIPv6();
+      (void)mDNSPrefetch->PrefetchHighPerFamily(dnsFlags, skipIPv4, skipIPv6);
+    } else {
+      if (mCaps & NS_HTTP_DISABLE_IPV4) {
+        dnsFlags |= nsIDNSService::RESOLVE_DISABLE_IPV4;
+      } else if (mCaps & NS_HTTP_DISABLE_IPV6) {
+        dnsFlags |= nsIDNSService::RESOLVE_DISABLE_IPV6;
+      }
+      (void)mDNSPrefetch->PrefetchHigh(dnsFlags);
+    }
   }
 }
 
@@ -11873,9 +11907,7 @@ static bool HasNullRequestOrigin(nsHttpChannel* aChannel, nsIURI* aURI,
                                  bool isAddonRequest) {
   // Step 1. If request has a redirect-tainted origin, then return "null".
   if (aChannel->HasRedirectTaintedOrigin()) {
-    if (StaticPrefs::network_http_origin_redirectTainted()) {
-      return true;
-    }
+    return true;
   }
 
   // Non-standard: Only allow HTTP and HTTPS origins.
@@ -12043,10 +12075,9 @@ void nsHttpChannel::SetDoNotTrack() {
 void nsHttpChannel::SetGlobalPrivacyControl() {
   MOZ_ASSERT(NS_IsMainThread(), "Must be called on the main thread");
 
-  if (StaticPrefs::privacy_globalprivacycontrol_functionality_enabled() &&
-      (StaticPrefs::privacy_globalprivacycontrol_enabled() ||
-       (StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled() &&
-        NS_UsePrivateBrowsing(this)))) {
+  if (StaticPrefs::privacy_globalprivacycontrol_enabled() ||
+      (StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled() &&
+       NS_UsePrivateBrowsing(this))) {
     // Send the header with a value of 1 to indicate opting-out
     DebugOnly<nsresult> rv =
         mRequestHead.SetHeader(nsHttp::GlobalPrivacyControl, "1"_ns, false);

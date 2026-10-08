@@ -82,6 +82,7 @@ enum class HapticFeedbackType : uint8_t {
   ShortPress = 0,
   LongPress = 1,
   TextHandleMove = 2,
+  ThresholdCrossing = 3,
 
   End,  // Not a feedback type, only to mark the upper boundary
 };
@@ -1807,12 +1808,12 @@ class nsIWidget : public nsSupportsWeakReference {
   virtual void StartAsyncScrollbarDrag(const AsyncDragMetrics& aDragMetrics);
 
   /**
-   * Notify APZ to start autoscrolling.
+   * Notify APZ to start autoscrolling. APZ may still reject the autoscroll,
+   * in which case it notifies content itself.
    * @param aAnchorLocation the location of the autoscroll anchor
    * @param aGuid identifies the scroll frame to be autoscrolled
-   * @return true if APZ has been successfully notified
    */
-  bool StartAsyncAutoscroll(const ScreenPoint& aAnchorLocation,
+  void StartAsyncAutoscroll(const ScreenPoint& aAnchorLocation,
                             const ScrollableLayerGuid& aGuid);
 
   /**

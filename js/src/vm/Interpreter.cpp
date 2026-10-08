@@ -441,6 +441,8 @@ bool js::RunScript(JSContext* cx, RunState& state) {
 
   MOZ_ASSERT_IF(cx->runtime()->hasJitRuntime(),
                 !cx->runtime()->jitRuntime()->disallowArbitraryCode());
+  MOZ_ASSERT_IF(cx->runtime()->hasJitRuntime(),
+                !cx->runtime()->jitRuntime()->inPureCall());
 
   // Since any script can conceivably GC, make sure it's safe to do so.
   cx->verifyIsSafeToGC();
@@ -1272,8 +1274,6 @@ static HandleErrorContinuation ProcessTryNotes(JSContext* cx,
       case TryNoteKind::Loop:
         break;
 
-      // TryNoteKind::ForOfIterClose is handled internally by the try note
-      // iterator.
       default:
         MOZ_CRASH("Invalid try note");
     }

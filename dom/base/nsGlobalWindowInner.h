@@ -111,6 +111,7 @@ class ContentMediaController;
 enum class ImageBitmapFormat : uint8_t;
 class IdleRequest;
 class IdleRequestCallback;
+class IdleRequestMap;
 class IntlUtils;
 class MediaQueryList;
 class OwningExternalOrWindowProxy;
@@ -654,6 +655,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   nsPIDOMWindowOuter* GetInProcessScriptableParent() override;
   mozilla::dom::Element* GetFrameElement(nsIPrincipal& aSubjectPrincipal,
                                          mozilla::ErrorResult& aError);
+  MOZ_CAN_RUN_SCRIPT
   mozilla::dom::Nullable<mozilla::dom::WindowProxyHolder> Open(
       const nsAString& aUrl, const nsAString& aName, const nsAString& aOptions,
       mozilla::ErrorResult& aError);
@@ -884,6 +886,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   bool DidFireDocElemInserted() const { return mDidFireDocElemInserted; }
   void SetDidFireDocElemInserted() { mDidFireDocElemInserted = true; }
 
+  MOZ_CAN_RUN_SCRIPT
   mozilla::dom::Nullable<mozilla::dom::WindowProxyHolder> OpenDialog(
       JSContext* aCx, const nsAString& aUrl, const nsAString& aName,
       const nsAString& aOptions,
@@ -1460,6 +1463,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   // The current idle request callback handle
   uint32_t mIdleRequestCallbackCounter;
   IdleRequests mIdleRequestCallbacks;
+  RefPtr<mozilla::dom::IdleRequestMap> mIdleRequestCallbacksByHandle;
   RefPtr<IdleRequestExecutor> mIdleRequestExecutor;
 
 #ifdef DEBUG

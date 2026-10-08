@@ -98,6 +98,14 @@ var EditContextMenu = {
   _itemSets: [],
 
   /**
+   * The input the menu was last opened on, for consumers that need to tell
+   * their own input's items and commands from another's.
+   *
+   * @type {Element}
+   */
+  input: null,
+
+  /**
    * The menu, built on first access.
    *
    * @type {Element}
@@ -116,18 +124,22 @@ var EditContextMenu = {
    * @param {() => DocumentFragment} itemSet.createItems
    *   Creates the items. Called once per menu, which may be built more than
    *   once in the lifetime of a document.
-   * @param {(input: Element, items: Element[]) => void} [itemSet.onShowing]
+   * @param {(input: Element, items: Element[], event: MouseEvent) => void} [itemSet.onShowing]
    *   Called before the menu opens on a matching input, to update the items'
    *   state. `items` is the set's live membership: amend it to claim items
    *   created outside createItems(), so they're hidden along with the rest when
-   *   the menu opens on another input.
+   *   the menu opens on another input. `event` is the contextmenu event, which
+   *   carries the position a spellchecker resolves the clicked word from.
    * @param {string} [itemSet.after]
    *   Id of the item to insert the items after. They go last by default.
+   * @param {string} [itemSet.before]
+   *   Id of the item to insert the items before, for a set that belongs above
+   *   the standard items. Ignored when `after` is given.
    * @returns {object}
    *   The set, to pass to removeItems().
    */
-  addItems({ matches, createItems, onShowing, after }) {
-    let itemSet = { matches, createItems, onShowing, after, items: [] };
+  addItems({ matches, createItems, onShowing, after, before }) {
+    let itemSet = { matches, createItems, onShowing, after, before, items: [] };
     this._itemSets.push(itemSet);
 
     let popup = document.getElementById("textbox-contextmenu");
@@ -158,9 +170,14 @@ var EditContextMenu = {
    *   The input or textarea to open the menu for.
    * @param {MouseEvent} event
    *   The contextmenu event that asked for the menu.
+   * @param {object} [options]
+   * @param {Element} [options.anchor]
+   *   Anchors the menu below this element instead of opening it at the event's
+   *   screen position, for an event that carries no useful position.
    */
-  open(input, event) {
+  open(input, event, { anchor } = {}) {
     let popup = this._ensurePopup();
+    this.input = input;
 
     // Commands are enabled for whatever has focus, so the items would otherwise
     // reflect a different element than the one the menu was opened on.
@@ -175,11 +192,15 @@ var EditContextMenu = {
         item.hidden = !matches;
       }
       if (matches) {
-        itemSet.onShowing?.(input, itemSet.items);
+        itemSet.onShowing?.(input, itemSet.items, event);
       }
     }
 
-    popup.openPopupAtScreen(event.screenX, event.screenY, true, event);
+    if (anchor) {
+      popup.openPopup(anchor, "after_start", 0, 0, true, false, event);
+    } else {
+      popup.openPopupAtScreen(event.screenX, event.screenY, true, event);
+    }
   },
 
   _ensurePopup() {
@@ -219,6 +240,8 @@ var EditContextMenu = {
     itemSet.items = [...fragment.children];
     if (itemSet.after) {
       popup.querySelector(`#${itemSet.after}`).after(fragment);
+    } else if (itemSet.before) {
+      popup.querySelector(`#${itemSet.before}`).before(fragment);
     } else {
       popup.appendChild(fragment);
     }
@@ -245,14 +268,10 @@ EditContextMenu.addItems({
 // Support context menus on html textareas in the parent process:
 window.addEventListener("contextmenu", e => {
   const HTML_NS = "http://www.w3.org/1999/xhtml";
-  const XUL_NS =
-    "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
   let target = e.composedTarget;
-  let parent = target.parentNode;
   let needsContextMenu =
     target.ownerDocument == document &&
     !e.defaultPrevented &&
-    !(parent.namespaceURI == XUL_NS && parent.localName == "moz-input-box") &&
     ["textarea", "input"].includes(target.localName) &&
     target.namespaceURI == HTML_NS;
 

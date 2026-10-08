@@ -79,13 +79,14 @@ nsresult BrowserBridgeParent::InitWithProcess(
   // Construct the BrowserParent object for our subframe.
   auto browserParent = MakeRefPtr<BrowserParent>(
       aContentParent, aTabId, *aParentBrowser, browsingContext, aChromeFlags);
-  browserParent->SetBrowserBridgeParent(this);
 
   ContentProcessManager* cpm = ContentProcessManager::GetSingleton();
   if (!cpm) {
     return NS_ERROR_UNEXPECTED;
   }
-  cpm->RegisterRemoteFrame(browserParent);
+  if (NS_WARN_IF(!cpm->RegisterRemoteFrame(browserParent))) {
+    return NS_ERROR_UNEXPECTED;
+  }
 
   // Open a remote endpoint for our PBrowser actor.
   ManagedEndpoint<PBrowserChild> childEp =
@@ -122,8 +123,10 @@ nsresult BrowserBridgeParent::InitWithProcess(
     return NS_ERROR_FAILURE;
   }
 
-  // Set our BrowserParent object to the newly created browser.
+  // Set our BrowserParent object to the newly created browser. Don't set the
+  // back pointer any earlier, as Destroy() only clears it once we own it.
   mBrowserParent = std::move(browserParent);
+  mBrowserParent->SetBrowserBridgeParent(this);
   mBrowserParent->SetOwnerElement(aParentBrowser->GetOwnerElement());
   mBrowserParent->InitRendering();
 
@@ -145,6 +148,9 @@ BrowserParent* BrowserBridgeParent::Manager() {
 
 void BrowserBridgeParent::Destroy() {
   if (mBrowserParent) {
+    // We only ever set the back pointer together with mBrowserParent, so
+    // clearing it below cannot clobber another bridge's pointer.
+    MOZ_ASSERT(mBrowserParent->GetBrowserBridgeParent() == this);
 #ifdef ACCESSIBILITY
     if (a11y::DocAccessibleParent* embedderDoc = GetEmbedderAccessibleDoc()) {
       embedderDoc->RemovePendingOOPChildDoc(this);
@@ -308,10 +314,15 @@ IPCResult BrowserBridgeParent::RecvSetEmbedderAccessible(uint64_t aID) {
     // document and add it when the new OuterDocAccessible arrives.
     RefPtr<WindowGlobalParent> embedderWgp =
         GetBrowsingContext()->GetEmbedderWindowGlobal();
-    auto* embedderDoc = embedderWgp
-                            ? a11y::DocAccessibleParent::GetFrom(
-                                  embedderWgp, /* aAllowShutdown */ true)
-                            : nullptr;
+    if (!embedderWgp || embedderWgp->IsDiscarded()) {
+      // The embedder WindowGlobalParent is discarded, which means its actor
+      // and thus its PDocAccessibleParent actor have been destroyed. The
+      // embedder's content process hasn't caught up yet, so its
+      // PDocAccessibleChild is still alive. Just ignore this.
+      return IPC_OK();
+    }
+    auto* embedderDoc = a11y::DocAccessibleParent::GetFrom(
+        embedderWgp, /* aAllowShutdown */ true);
     if (!embedderDoc) {
       return IPC_FAIL(this, "Embedder's PDocAccessible doesn't exist");
     }

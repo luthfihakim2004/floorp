@@ -137,6 +137,18 @@ mozilla::ipc::IPCResult UtilityProcessParent::RecvInitCompleted() {
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult UtilityProcessParent::RecvShutdownProfile(
+    mozilla::ProfileAndAdditionalInformation&&
+        aProfileAndAdditionalInformation) {
+  profiler_received_exit_profile(std::move(aProfileAndAdditionalInformation));
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult UtilityProcessParent::RecvFinishShutdown() {
+  Close();
+  return IPC_OK();
+}
+
 void UtilityProcessParent::ActorDestroy(ActorDestroyReason aWhy) {
   RefPtr props = MakeRefPtr<nsHashPropertyBag>();
 
@@ -170,8 +182,7 @@ void UtilityProcessParent::ActorDestroy(ActorDestroyReason aWhy) {
     if (!dumpID.IsEmpty()) {
       props->SetPropertyAsAString(u"dumpID"_ns, dumpID);
     }
-
-    MaybeTerminateProcess();
+    MaybeTerminateProcess(dumpID);
   }
 
   nsAutoString pid;

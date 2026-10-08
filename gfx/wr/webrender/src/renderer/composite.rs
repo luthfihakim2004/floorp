@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::mem;
 use crate::debug_item::DebugItem;
 use crate::segment::EdgeMask;
-use crate::device::DrawTarget;
+use crate::device::{BlendMode, DrawTarget, LoadOp, RenderPassDescriptor, StoreOp};
 use crate::gpu_types::{CompositeInstance, ZBufferId};
 use crate::internal_types::{FastHashMap, TextureSource};
 use crate::picture::ResolvedSurfaceTexture;
@@ -80,8 +80,8 @@ impl Renderer {
 
         let opaque_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_OPAQUE);
 
-        self.device.disable_depth();
-        self.set_blend(false, FramebufferKind::Main);
+        self.device.set_depth_test(None);
+        self.set_blend_mode(BlendMode::None, FramebufferKind::Main);
 
         for surface in external_surfaces {
             // See if this surface needs to be updated
@@ -99,7 +99,6 @@ impl Renderer {
                 .compositor()
                 .unwrap()
                 .bind(
-                    &mut self.device,
                     NativeTileId {
                         surface_id: native_surface_id,
                         x: 0,
@@ -112,10 +111,15 @@ impl Renderer {
             // Bind the native surface to current FBO target
             let draw_target = DrawTarget::NativeSurface {
                 offset: surface_info.origin,
-                external_fbo_id: surface_info.fbo_id,
+                handle: surface_info.handle,
                 dimensions: surface_size,
             };
-            self.device.bind_draw_target(draw_target);
+            self.device.begin_render_pass(&RenderPassDescriptor {
+                target: draw_target,
+                render_area: None,
+                color_load: LoadOp::DontCare,
+                depth_load: LoadOp::DontCare,
+            });
 
             let projection = Transform3D::ortho(
                 0.0,
@@ -218,10 +222,12 @@ impl Renderer {
                 &mut results.stats,
             );
 
+            self.device.end_render_pass(StoreOp::Store);
+
             self.compositor_config
                 .compositor()
                 .unwrap()
-                .unbind(&mut self.device);
+                .unbind();
         }
 
         self.gpu_profiler.finish_sampler(opaque_sampler);
@@ -447,10 +453,6 @@ impl Renderer {
         partial_present_mode: Option<PartialPresentMode>,
         layer: &SwapChainLayer,
     ) {
-        self.device.bind_draw_target(draw_target);
-        self.device.disable_depth_write();
-        self.device.disable_depth();
-
         // If using KHR_partial_update, call eglSetDamageRegion.
         // This must be called exactly once per frame, and prior to any rendering to the main
         // framebuffer. Additionally, on Mali-G77 we encountered rendering issues when calling
@@ -462,27 +464,34 @@ impl Renderer {
             }
         }
 
-        // Clear the framebuffer
-        let clear_color = Some(clear_color.to_array());
+        let clear_color = clear_color.to_array();
 
-        match partial_present_mode {
-            Some(PartialPresentMode::Single { dirty_rect }) => {
-                // There is no need to clear if the dirty rect is occluded. Additionally,
-                // on Mali-G77 we have observed artefacts when calling glClear (even with
-                // the empty scissor rect set) after calling eglSetDamageRegion with an
-                // empty damage region. So avoid clearing in that case. See bug 1709548.
-                if !dirty_rect.is_empty() && layer.occlusion.test(&dirty_rect) {
-                    // We have a single dirty rect, so clear only that
-                    self.device.clear_target(clear_color,
-                                             None,
-                                             Some(draw_target.to_framebuffer_rect(dirty_rect.to_i32())));
-                }
-            }
-            None => {
-                // Partial present is disabled, so clear the entire framebuffer
-                self.device.clear_target(clear_color,
-                                         None,
-                                         None);
+        self.device.begin_render_pass(&RenderPassDescriptor {
+            target: draw_target,
+            render_area: None,
+            // Partial present clears just the dirty rect below; otherwise the
+            // entire framebuffer is cleared.
+            color_load: match partial_present_mode {
+                Some(PartialPresentMode::Single { .. }) => LoadOp::Load,
+                None => LoadOp::Clear(clear_color),
+            },
+            depth_load: LoadOp::DontCare,
+        });
+        self.device.set_depth_write(false);
+        self.device.set_depth_test(None);
+
+        if let Some(PartialPresentMode::Single { dirty_rect }) = partial_present_mode {
+            // There is no need to clear if the dirty rect is occluded. Additionally,
+            // on Mali-G77 we have observed artefacts when calling glClear (even with
+            // the empty scissor rect set) after calling eglSetDamageRegion with an
+            // empty damage region. So avoid clearing in that case. See bug 1709548.
+            if !dirty_rect.is_empty() && layer.occlusion.test(&dirty_rect) {
+                // We have a single dirty rect, so clear only that
+                self.device.clear_rect(
+                    draw_target.to_framebuffer_rect(dirty_rect.to_i32()),
+                    Some(clear_color),
+                    None,
+                );
             }
         }
 
@@ -490,7 +499,7 @@ impl Renderer {
         let opaque_items = layer.occlusion.opaque_items();
         if !opaque_items.is_empty() {
             let opaque_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_OPAQUE);
-            self.set_blend(false, FramebufferKind::Main);
+            self.set_blend_mode(BlendMode::None, FramebufferKind::Main);
             self.draw_tile_list(
                 opaque_items.iter(),
                 &composite_state,
@@ -505,8 +514,7 @@ impl Renderer {
         let alpha_items = layer.occlusion.alpha_items();
         if !alpha_items.is_empty() {
             let transparent_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_TRANSPARENT);
-            self.set_blend(true, FramebufferKind::Main);
-            self.set_blend_mode_premultiplied_alpha(FramebufferKind::Main);
+            self.set_blend_mode(BlendMode::PremultipliedAlpha, FramebufferKind::Main);
             self.draw_tile_list(
                 alpha_items.iter().rev(),
                 &composite_state,
@@ -516,6 +524,8 @@ impl Renderer {
             );
             self.gpu_profiler.finish_sampler(transparent_sampler);
         }
+
+        self.device.end_render_pass(StoreOp::Store);
     }
 
     /// Composite picture cache tiles into the framebuffer. This is currently
@@ -1158,7 +1168,7 @@ impl Renderer {
 
                     DrawTarget::NativeSurface {
                         offset: -layer.offset,
-                        external_fbo_id: 0,
+                        handle: crate::composite::NativeSurfaceHandle::DEFAULT,
                         dimensions: frame_device_size,
                     }
                 }
