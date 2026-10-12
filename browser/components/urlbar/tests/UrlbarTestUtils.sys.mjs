@@ -211,26 +211,46 @@ export class UrlbarInputBaseTestUtils {
    * Waits to a search to be complete.
    *
    * @param {ChromeWindow} win The window containing the urlbar
+   * @returns {Promise<UrlbarQueryContext>}
    */
   async promiseSearchComplete(win) {
-    let waitForQuery = async () => {
-      await this.promisePopupOpen(win, () => {});
+    let waitForQuery = async awaitedPromise => {
+      let urlbar = this.#urlbar(win);
+      // A query without results leaves the view closed, so also settle on the
+      // query finishing. A pass that finds no newer query than the one already
+      // awaited has nothing to wait for.
+      if (
+        !urlbar.view.isOpen &&
+        urlbar.lastQueryContextPromise !== awaitedPromise
+      ) {
+        await new Promise(resolve => {
+          let done = () => {
+            urlbar.controller.removeListener(listener);
+            resolve();
+          };
+          let listener = {
+            onViewOpen: done,
+            onQueryFinished: done,
+            onQueryCancelled: done,
+          };
+          this.addControllerListener(urlbar.controller, listener);
+        });
+      }
       // Re-read `lastQueryContextPromise` after each await in case the query
       // was restarted (e.g., by the `reopenOnBlur` mechanism in
       // `promiseAutocompleteResultPopup`), and wait for the latest query.
       let promise;
       let context;
       do {
-        promise = this.#urlbar(win).lastQueryContextPromise;
+        promise = urlbar.lastQueryContextPromise;
         context = await promise;
-      } while (this.#urlbar(win).lastQueryContextPromise !== promise);
-      return context;
+      } while (urlbar.lastQueryContextPromise !== promise);
+      return { context, promise };
     };
-    /** @type {UrlbarQueryContext} */
-    let context = await waitForQuery();
+    let { context, promise } = await waitForQuery();
     if (this.#urlbar(win).searchMode) {
       // Search mode may start a second query.
-      context = await waitForQuery();
+      ({ context } = await waitForQuery(promise));
     }
     if (this.#urlbar(win).view.oneOffSearchButtons?._rebuilding) {
       await new Promise(resolve =>
@@ -713,7 +733,7 @@ export class UrlbarInputBaseTestUtils {
     let details = {};
     let result = element.result;
     details.result = result;
-    let { url, postData } = UrlbarUtils.getUrlFromResult(result);
+    let { url, postData } = this.getUrlAndPostData(result);
     details.url = url;
     details.postData = postData;
     details.type = result.type;
@@ -762,6 +782,18 @@ export class UrlbarInputBaseTestUtils {
       details.dynamicType = result.payload.dynamicType;
     }
     return details;
+  }
+
+  /**
+   * The url and post data a result would load, as `getDetailsOfResultAt`
+   * reports them. Resolving a search result's url takes the search service, so
+   * an input in a content process leaves this to its parent-side facade.
+   *
+   * @param {UrlbarResult} result
+   * @returns {{url: ?string, postData: ?nsIInputStream}}
+   */
+  getUrlAndPostData(result) {
+    return UrlbarUtils.getUrlFromResult(result);
   }
 
   /**
@@ -883,10 +915,17 @@ export class UrlbarInputBaseTestUtils {
     // for the current query. For now let's just wait for the search to be
     // complete.
     return this.promiseSearchComplete(win).then(context => {
-      // Look for search suggestions.
-      let firstSearchSuggestionIndex = context.results.findIndex(
-        r => r.type == UrlbarShared.RESULT_TYPE.SEARCH && r.payload.suggestion
-      );
+      // Look for search suggestions. For a urlbar in a content process, a
+      // callback another realm's `findIndex` invokes gets its results
+      // Xray-wrapped, and an Xray over a class instance reads every property as
+      // undefined.
+      let firstSearchSuggestionIndex = context.results.findIndex(result => {
+        result = Cu.waiveXrays(result);
+        return (
+          result.type == UrlbarShared.RESULT_TYPE.SEARCH &&
+          result.payload.suggestion
+        );
+      });
       if (firstSearchSuggestionIndex == -1) {
         throw new Error("Cannot find a search suggestion");
       }
@@ -1173,10 +1212,12 @@ export class UrlbarInputBaseTestUtils {
         "browser.urlbar.placeholderName" +
         (lazy.PrivateBrowsingUtils.isWindowPrivate(window) ? ".private" : "");
       let engineName = Services.prefs.getStringPref(prefName, "");
-      let keywordEnabled = Services.prefs.getBoolPref("keyword.enabled");
+      let keywordEnabled = UrlbarShared.keywordEnabled(
+        this.#urlbar(window).sapName
+      );
 
       let expectedPlaceholder;
-      if (this.#urlbar(window).isSearchbarSAP) {
+      if (!UrlbarShared.navigationEnabled(this.#urlbar(window).sapName)) {
         expectedPlaceholder = { id: "searchbar-input" };
       } else if (keywordEnabled && engineName) {
         expectedPlaceholder = {
@@ -1286,8 +1327,8 @@ export class UrlbarInputBaseTestUtils {
 
     // Check the input's placeholder.
     let expectedPlaceholderL10n;
-    if (this.#urlbar(window).isSearchbarSAP) {
-      // A search bar's placeholder stays constant.
+    if (!UrlbarShared.navigationEnabled(this.#urlbar(window).sapName)) {
+      // The toolbar search bar's placeholder stays constant.
       expectedPlaceholderL10n = {
         id: "searchbar-input",
         args: null,
@@ -1569,7 +1610,7 @@ export class UrlbarInputBaseTestUtils {
    *        UrlbarParentController constructor.
    * @returns {UrlbarChildController} A new controller.
    */
-  newMockController(options = {}) {
+  mockChildController(options = {}) {
     let sapName = options.sapName || "urlbar";
     // Ensure a sapName is defined, as otherwise we'd not get the same
     // ProvidersManager instance across tests.
@@ -1617,7 +1658,6 @@ export class UrlbarInputBaseTestUtils {
     // chrome window). It is exposed as `controller.parentController`.
     parentOptions.input.window.windowGlobalChild = {
       getActor: () => ({
-        usesMessagePath: false,
         browsingContext: { topChromeWindow: browserWindow },
       }),
     };
@@ -2194,6 +2234,79 @@ export class UrlbarInputBaseTestUtils {
       );
     }
     this.#firstDayOfWeekStub.returns(firstDay);
+  }
+
+  /**
+   * Returns a `moz-remote-image` URL for the given http(s) URL. In the returned
+   * URL, only the `url` search param will be set. Designed to be used with
+   * `checkImageUrl()`.
+   *
+   * @param {?string} httpUrl
+   *   A bare http(s) (or other remote) URL.
+   * @returns {string}
+   *   A `moz-remote-image` URL with the `url` search param set, or `httpUrl`
+   *   itself if it's falsey.
+   */
+  makeMozRemoteImageUrl(httpUrl) {
+    if (!httpUrl) {
+      return httpUrl;
+    }
+    let url = new URL("moz-remote-image://");
+    url.searchParams.set("url", httpUrl);
+    return url.toString();
+  }
+
+  /**
+   * Asserts that two image/icon URLs are equivalent, taking into account
+   * `moz-remote-image` URLs. This function considers two `moz-remote-image`
+   * URLs equivalent if their `url` search params are equal.
+   *
+   * This function also asserts that the given actual URL is not an http(s) URL
+   * since remote images should never be decoded in the main process.
+   *
+   * @param {string} actualUrl
+   *   The actual URL being checked. Can be `moz-remote-image`, `chrome`,
+   *   `data`, etc. This function will assert that this is not an http(s) URL.
+   * @param {string} expectedUrl
+   *   The expected URL. If the actual URL is expected to be a
+   *   `moz-remote-image` URL, the expected URL must also be a
+   *   `moz-remote-image`, but only their `url` search params are compared.
+   * @param {string} message
+   *   An optional message that will be logged at the start.
+   */
+  checkImageUrl(actualUrl, expectedUrl, message = "") {
+    this.info("Checking image URLs");
+    if (message) {
+      this.info(message);
+    }
+
+    this.info("Actual:   " + JSON.stringify(actualUrl));
+    this.info("Expected: " + JSON.stringify(expectedUrl));
+
+    this.Assert.ok(
+      !actualUrl.startsWith("http"),
+      "Image URLs should never use http(s) (use moz-remote-image instead)"
+    );
+
+    if (
+      !actualUrl.startsWith("moz-remote-image") ||
+      !expectedUrl.startsWith("moz-remote-image")
+    ) {
+      this.Assert.equal(
+        actualUrl,
+        expectedUrl,
+        "One or both of the image URLs are not moz-remote-image, so they should simply be equal"
+      );
+      return;
+    }
+
+    let actualMozRemoteUrl = new URL(actualUrl);
+    let expectedMozRemoteUrl = new URL(expectedUrl);
+    this.Assert.equal(
+      actualMozRemoteUrl.searchParams.get("url"),
+      expectedMozRemoteUrl.searchParams.get("url"),
+      "The inner URLs of the moz-remote-image URLs should match"
+    );
   }
 
   #firstDayOfWeekStub;

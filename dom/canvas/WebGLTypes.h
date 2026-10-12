@@ -215,6 +215,7 @@ enum class WebGLExtensionID : uint8_t {
   EXT_disjoint_timer_query,
   EXT_float_blend,
   EXT_frag_depth,
+  EXT_polygon_offset_clamp,
   EXT_shader_texture_lod,
   EXT_sRGB,
   EXT_texture_compression_bptc,
@@ -440,7 +441,6 @@ struct avec2 {
   avec2(const T _x, const T _y) : x(_x), y(_y) {}
 
   bool operator==(const avec2& rhs) const = default;
-  bool operator!=(const avec2& rhs) const = default;
 
 #define _(OP)                                 \
   avec2 operator OP(const avec2& rhs) const { \
@@ -505,7 +505,6 @@ struct avec3 {
   avec3(const T _x, const T _y, const T _z) : x(_x), y(_y), z(_z) {}
 
   bool operator==(const avec3& rhs) const = default;
-  bool operator!=(const avec3& rhs) const = default;
 };
 
 using ivec2 = avec2<int32_t>;
@@ -875,7 +874,7 @@ struct LinkActiveInfo final {
 };
 
 struct LinkResult final : public SupportsWeakPtr {
-  LinkResult() {}
+  LinkResult() = default;
   ~LinkResult() = default;
 
   bool pending = true;
@@ -940,7 +939,7 @@ struct VertAttribPointerCalculated final {
 }  // namespace webgl
 
 template <class T>
-inline Range<T> ShmemRange(const mozilla::ipc::Shmem& shmem) {
+inline mozilla::Range<T> ShmemRange(const mozilla::ipc::Shmem& shmem) {
   return {shmem.get<T>(), shmem.Size<T>()};
 }
 
@@ -1184,12 +1183,12 @@ struct TexUnpackBlobDesc final {
 // MakeRange
 
 template <typename T, size_t N>
-inline Range<const T> MakeRange(T (&arr)[N]) {
+inline mozilla::Range<const T> MakeRange(T (&arr)[N]) {
   return {arr, N};
 }
 
 template <typename T>
-inline Range<const T> MakeRange(const dom::Sequence<T>& seq) {
+inline mozilla::Range<const T> MakeRange(const dom::Sequence<T>& seq) {
   return {seq.Elements(), seq.Length()};
 }
 
@@ -1207,7 +1206,7 @@ inline size_t AlignmentOffset(const size_t alignment, const T posOrPtr) {
 }
 
 template <typename T>
-inline size_t ByteSize(const Range<T>& range) {
+inline size_t ByteSize(const mozilla::Range<T>& range) {
   return range.length() * sizeof(T);
 }
 
@@ -1244,13 +1243,13 @@ inline void Memcpy(const RangedPtr<uint8_t>& destBytes,
 }
 
 template <class T, class U>
-inline void Memcpy(const Range<T>* const destRange,
+inline void Memcpy(const mozilla::Range<T>* const destRange,
                    const RangedPtr<U>& srcBegin) {
   Memcpy(destRange->begin(), srcBegin, destRange->length());
 }
 template <class T, class U>
 inline void Memcpy(const RangedPtr<T>* const destBegin,
-                   const Range<U>& srcRange) {
+                   const mozilla::Range<U>& srcRange) {
   Memcpy(destBegin, srcRange->begin(), srcRange->length());
 }
 

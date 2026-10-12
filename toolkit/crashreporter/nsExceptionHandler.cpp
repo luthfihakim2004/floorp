@@ -7,24 +7,16 @@
 #include "ExtraFileParser.h"
 
 #include "json/json.h"
-#include "nsAppDirectoryServiceDefs.h"
-#include "nsComponentManagerUtils.h"
-#include "nsDirectoryServiceDefs.h"
-#include "nsDirectoryService.h"
 #include "nsIDUtils.h"
 #include "nsIFileStreams.h"
 #include "nsNetUtil.h"
 #include "nsString.h"
-#include "mozilla/DebugOnly.h"
 #include "mozilla/GeckoArgs.h"
 #include "mozilla/EnumeratedRange.h"
 #include "mozilla/Services.h"
 #include "nsIObserverService.h"
 #include "mozilla/RuntimeExceptionModule.h"
-#include "mozilla/ScopeExit.h"
-#include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_browser.h"
-#include "mozilla/SyncRunnable.h"
 #include "mozilla/ToString.h"
 #include "mozilla/TimeStamp.h"
 
@@ -33,9 +25,6 @@
 #include "prsystem.h"
 #include "nsThreadUtils.h"
 #include "nsThread.h"
-#include "jsfriendapi.h"
-#include "base/process_util.h"
-#include "common/basictypes.h"
 
 #include "mozilla/toolkit/crashreporter/mozannotation_client_ffi_generated.h"
 #include "mozilla/crash_helper_client_ffi_generated.h"
@@ -54,18 +43,20 @@
 #  endif
 
 #  include "nsXULAppAPI.h"
-#  include "nsIXULAppInfo.h"
-#  include "nsIWindowsRegKey.h"
 #  include "breakpad-client/windows/crash_generation/client_info.h"
 #  include "breakpad-client/windows/crash_generation/crash_generation_server.h"
 #  include "breakpad-client/windows/handler/exception_handler.h"
 #  include <dbghelp.h>
+#  include <filesystem>
 #  include <string.h>
-#  include "nsDirectoryServiceUtils.h"
-
-#  include "nsWindowsDllInterceptor.h"
+#  include "mozilla/DebugOnly.h"
 #  include "mozilla/WindowsDllBlocklist.h"
+#  include "nsDirectoryServiceUtils.h"
+#  include "nsWindowsDllInterceptor.h"
 #  include "psapi.h"  // For PERFORMANCE_INFORMATION and K32GetPerformanceInfo()
+#  if defined(HAVE_64BIT_BUILD)
+#    include "jsfriendapi.h"
+#  endif  // defined(HAVE_64BIT_BUILD)
 #elif defined(XP_MACOSX)
 #  include "breakpad-client/mac/crash_generation/client_info.h"
 #  include "breakpad-client/mac/crash_generation/crash_generation_server.h"
@@ -99,6 +90,7 @@
 #  include "sys/sysinfo.h"
 #  include <sys/wait.h>
 #  include <unistd.h>
+#  include "mozilla/ScopeExit.h"
 
 #  if defined(MOZ_OXIDIZED_BREAKPAD)
 #    include "mozilla/toolkit/crashreporter/rust_minidump_writer_linux_ffi_generated.h"
@@ -109,9 +101,6 @@
 #  error "Not yet implemented for this platform"
 #endif  // defined(XP_WIN)
 
-#ifdef XP_WIN
-#  include <filesystem>
-#endif
 #include <fmt/format.h>
 #include <fstream>
 #include <optional>
@@ -269,14 +258,6 @@ static bool isGarbageCollecting;
 static uint32_t eventloopNestingLevel = 0;
 static time_t inactiveStateStart = 0;
 
-static
-#if defined(XP_UNIX)
-    pthread_t
-#elif defined(XP_WIN)  // defined(XP_UNIX)
-    DWORD
-#endif                 // defined(XP_WIN)
-        gMainThreadId;
-
 // Avoid a race during application termination.
 static Mutex* dumpSafetyLock;
 static bool isSafeToDump = false;
@@ -297,32 +278,6 @@ static int serverSocketFd = -1;
 static int crashHelperClientFd = -1;
 #  endif
 #endif
-
-void RecordMainThreadId() {
-  gMainThreadId =
-#if defined(XP_UNIX)
-      pthread_self()
-#elif defined(XP_WIN)  // defined(XP_UNIX)
-      GetCurrentThreadId()
-#endif                 // defined(XP_WIN)
-      ;
-}
-
-bool SignalSafeIsMainThread() {
-  // We can't rely on NS_IsMainThread() because we are in a signal handler, and
-  // sTLSIsMainThread is a thread local variable and it can be lazy allocated
-  // i.e., we could hit code path where this variable has not been accessed
-  // before and needs to be allocated right now, which will lead to spinlock
-  // deadlock effectively hanging the process, as in bug 1756407.
-
-#if defined(XP_UNIX)
-  pthread_t th = pthread_self();
-  return pthread_equal(th, gMainThreadId);
-#elif defined(XP_WIN)  // defined(XP_UNIX)
-  DWORD th = GetCurrentThreadId();
-  return th == gMainThreadId;
-#endif                 // defined(XP_WIN)
-}
 
 #if defined(XP_WIN)
 // the following are used to prevent other DLLs reverting the last chance
@@ -1419,7 +1374,7 @@ static void WriteAnnotations(AnnotationWriter& aWriter,
                              const AnnotationTable& aAnnotations) {
   for (auto key : MakeEnumeratedRange(Annotation::Count)) {
     const nsCString& value = aAnnotations[key];
-    if (!value.IsEmpty()) {
+    if (!value.IsEmpty() && ShouldIncludeAnnotation(key, value.get())) {
       aWriter.Write(key, value.get(), value.Length());
     }
   }
@@ -2130,8 +2085,6 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory, bool force /*=false*/) {
   // Tell JS about the new filter before we disable SetUnhandledExceptionFilter
   SetJitExceptionHandler();
 #  endif
-
-  RecordMainThreadId();
 
   // protect the crash reporter from being unloaded
   gBlockUnhandledExceptionFilter = true;
@@ -3226,20 +3179,6 @@ bool WriteExtraFile(const nsAString& id, const AnnotationTable& annotations) {
   return WriteExtraFile(pw, annotations);
 }
 
-// This filters out annotations that have specific values we don't want to
-// include and adds common annotations which are present in every crash report
-// including crash time, uptime, etc...
-static void AddSharedAnnotations(AnnotationTable& aAnnotations) {
-  for (auto key : MakeEnumeratedRange(Annotation::Count)) {
-    if (!aAnnotations[key].IsEmpty() &&
-        !ShouldIncludeAnnotation(key, aAnnotations[key].get())) {
-      aAnnotations[key] = EmptyCString();
-    }
-  }
-
-  AddCommonAnnotations(aAnnotations);
-}
-
 // It really only makes sense to call this function when
 // ShouldReport() is true.
 // Uses dumpFile's filename to generate memoryReport's filename (same name
@@ -3543,8 +3482,6 @@ bool SetRemoteExceptionHandler(int& aArgc, char** aArgv) {
                                             crash_pipe);
 #endif
 
-  RecordMainThreadId();
-
   oldTerminateHandler = std::set_terminate(&TerminateHandler);
 
   // If we didn't fail earlier because of a missing IPC channel then all of the
@@ -3594,7 +3531,7 @@ bool TakeMinidumpForChild(GeckoChildID aChildId, nsIFile** dump,
 
   nsresult rv = ReadExtraFile(extra, aAnnotations);
 
-  // Unconditionally remove the temporary .extra file, it will be regenarated
+  // Unconditionally remove the temporary .extra file, it will be regenerated
   // later when we finalize the crash report.
   extra->Remove(false);
 
@@ -3604,7 +3541,7 @@ bool TakeMinidumpForChild(GeckoChildID aChildId, nsIFile** dump,
     return false;
   }
 
-  AddSharedAnnotations(aAnnotations);
+  AddCommonAnnotations(aAnnotations);
 
   if (error.Length() > 0) {
     aAnnotations[Annotation::DumperError] = std::move(error);
@@ -3669,74 +3606,21 @@ static void RenameAdditionalHangMinidump(nsIFile* minidump,
   }
 }
 
-// Stores the minidump in the nsIFile pointed by the |context| parameter.
-static bool PairedDumpCallback(
-#ifdef XP_LINUX
-    const MinidumpDescriptor& descriptor,
-#else
-    const XP_CHAR* dump_path, const XP_CHAR* minidump_id,
-#endif
-    void* context,
-#ifdef XP_WIN
-    EXCEPTION_POINTERS* /*unused*/, MDRawAssertionInfo* /*unused*/,
-#endif
-    const phc::AddrInfo* addrInfo, bool succeeded) {
-  XP_CHAR* path = static_cast<XP_CHAR*>(context);
-  size_t size = XP_PATH_MAX;
-
-#ifdef XP_LINUX
-  Concat(path, descriptor.path(), &size);
-#else
-  path = Concat(path, dump_path, &size);
-  path = Concat(path, XP_PATH_SEPARATOR, &size);
-  path = Concat(path, minidump_id, &size);
-  Concat(path, dumpFileExtension, &size);
-#endif
-
-  return true;
-}
-
 ThreadId CurrentThreadId() {
 #if defined(XP_WIN)
   return ::GetCurrentThreadId();
 #elif defined(XP_LINUX)
   return sys_gettid();
-#elif defined(XP_MACOSX)
-  // Just return an index, since Mach ports can't be directly serialized
-  thread_act_port_array_t threads_for_task;
-  mach_msg_type_number_t thread_count;
-
-  if (task_threads(mach_task_self(), &threads_for_task, &thread_count))
-    return -1;
-
-  for (unsigned int i = 0; i < thread_count; ++i) {
-    if (threads_for_task[i] == mach_thread_self()) return i;
-  }
-  abort();
+#elif defined(XP_DARWIN)
+  // Note that this will leak the mach port unless it's explicitly closed or
+  // assigned to a RAII type such as `UniqueMachSendRight`.
+  return mach_thread_self();
 #else
 #  error "Unsupported platform"
 #endif
 }
 
-#ifdef XP_MACOSX
-static mach_port_t GetChildThread(ProcessHandle childPid,
-                                  ThreadId childBlamedThread) {
-  mach_port_t childThread = MACH_PORT_NULL;
-  thread_act_port_array_t threads_for_task;
-  mach_msg_type_number_t thread_count;
-
-  if (task_threads(childPid, &threads_for_task, &thread_count) ==
-          KERN_SUCCESS &&
-      childBlamedThread < thread_count) {
-    childThread = threads_for_task[childBlamedThread];
-  }
-
-  return childThread;
-}
-#endif
-
-bool CreateMinidumpsAndPair(ProcessHandle aTargetHandle,
-                            ThreadId aTargetBlamedThread,
+bool CreateMinidumpsAndPair(GeckoChildID aId, ThreadId aTargetBlamedThread,
                             const nsACString& aIncomingPairName,
                             AnnotationTable& aTargetAnnotations,
                             nsIFile** aMainDumpOut) {
@@ -3745,62 +3629,66 @@ bool CreateMinidumpsAndPair(ProcessHandle aTargetHandle,
   }
 
   AutoIOInterposerDisable disableIOInterposition;
-
-#ifdef XP_MACOSX
-  mach_port_t targetThread = GetChildThread(aTargetHandle, aTargetBlamedThread);
-#else
-  ThreadId targetThread = aTargetBlamedThread;
+#if defined(XP_WIN) && defined(DEBUG) && defined(HAS_DLL_BLOCKLIST)
+  DllBlocklist_Shutdown();
 #endif
 
-  xpstring dump_path;
-#ifndef XP_LINUX
-  dump_path = gExceptionHandler->dump_path();
-#else
-  dump_path = gExceptionHandler->minidump_descriptor().directory();
-#endif
+  CrashReport* crash_report = nullptr;
 
-  // Ugly, but due to Breakpad limitations we can't allocate memory in the
-  // callback when generating a dump of the calling process.
-  XP_CHAR minidumpPath[XP_PATH_MAX] = {};
+  {
+    StaticMutexAutoLock lock(gCrashHelperClientMutex);
+    if (gCrashHelperClient) {
+#if defined(XP_DARWIN)
+      // We need to make a copy of this right as the Rust code will take
+      // ownership of it (and eventually dispose of the right).
+      aTargetBlamedThread = RetainMachSendRight(aTargetBlamedThread).release();
+#endif  // defined(XP_DARWIN)
+      crash_report =
+          generate_crash_report(gCrashHelperClient, aId, aTargetBlamedThread);
+    }
+  }
 
-  // dump the target
-  if (!google_breakpad::ExceptionHandler::WriteMinidumpForChild(
-          aTargetHandle, targetThread,
-#if defined(XP_LINUX) && defined(MOZ_OXIDIZED_BREAKPAD)
-          /* auxvInfo */ nullptr,
-#endif  // defined(XP_LINUX) && defined(MOZ_OXIDIZED_BREAKPAD)
-          dump_path, PairedDumpCallback, static_cast<void*>(minidumpPath)
-#ifdef XP_WIN
-                                             ,
-          GetMinidumpType()
-#endif
-              )) {
+  if (!crash_report) {
     return false;
   }
 
   nsCOMPtr<nsIFile> targetMinidump;
-  CreateFileFromPath(xpstring(minidumpPath), getter_AddRefs(targetMinidump));
+  CreateFileFromPath(xpstring((XP_CHAR*)crash_report->path),
+                     getter_AddRefs(targetMinidump));
+  nsCString error =
+      crash_report->error ? nsCString(crash_report->error) : ""_ns;
+  release_crash_report(crash_report);
   MOZ_ASSERT(targetMinidump);
 
-  // Create a dump of this process.
-  if (!google_breakpad::ExceptionHandler::WriteMinidump(
-          dump_path,
-#ifdef XP_MACOSX
-          true,
-#endif
-          PairedDumpCallback, static_cast<void*>(minidumpPath)
-#ifdef XP_WIN
-                                  ,
-          GetMinidumpType()
-#endif
-              )) {
-    targetMinidump->Remove(false);
+  nsCOMPtr<nsIFile> extra = nullptr;
+  NS_ENSURE_TRUE(GetExtraFileForMinidump(targetMinidump, getter_AddRefs(extra)),
+                 false);
+
+  // Create a dump of the main process.
+  {
+    StaticMutexAutoLock lock(gCrashHelperClientMutex);
+    crash_report =
+        generate_crash_report(gCrashHelperClient, 0, CurrentThreadId());
+  }
+
+  if (!crash_report) {
+    // We're leaving behind a minidump, clean it up?
     return false;
   }
 
   nsCOMPtr<nsIFile> incomingDump;
-  CreateFileFromPath(xpstring(minidumpPath), getter_AddRefs(incomingDump));
+  CreateFileFromPath(xpstring((XP_CHAR*)crash_report->path),
+                     getter_AddRefs(incomingDump));
+  release_crash_report(crash_report);
   MOZ_ASSERT(incomingDump);
+
+  // We're ignoring the errors we might have encountered while dumping the
+  // parent, they're not really important in this context and we don't need
+  // the crash annotations either.
+  nsCOMPtr<nsIFile> incomingExtra = nullptr;
+  if (GetExtraFileForMinidump(incomingDump, getter_AddRefs(incomingExtra))) {
+    incomingExtra->Remove(false);
+  }
 
   RenameAdditionalHangMinidump(incomingDump, targetMinidump, aIncomingPairName);
 
@@ -3808,12 +3696,24 @@ bool CreateMinidumpsAndPair(ProcessHandle aTargetHandle,
     MoveToPending(targetMinidump, nullptr, nullptr);
     MoveToPending(incomingDump, nullptr, nullptr);
   }
-#if defined(DEBUG) && defined(HAS_DLL_BLOCKLIST)
-  DllBlocklist_Shutdown();
-#endif
 
-  AddSharedAnnotations(aTargetAnnotations);
-  // TODO: Retrieve annotations from child process
+  nsresult rv = ReadExtraFile(extra, aTargetAnnotations);
+
+  // Unconditionally remove the temporary .extra file, it will be regenerated
+  // later when we finalize the crash report.
+  extra->Remove(false);
+
+  if (rv != NS_OK) {
+    // TODO: We failed to read the annotations, this will leave an orphaned
+    // crash that we won't be able to submit. Clean everything up instead?
+    return false;
+  }
+
+  AddCommonAnnotations(aTargetAnnotations);
+
+  if (error.Length() > 0) {
+    aTargetAnnotations[Annotation::DumperError] = std::move(error);
+  }
 
   targetMinidump.forget(aMainDumpOut);
 

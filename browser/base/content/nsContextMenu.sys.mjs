@@ -15,7 +15,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs",
   DevToolsShim: "chrome://devtools-startup/content/DevToolsShim.sys.mjs",
   E10SUtils: "resource://gre/modules/E10SUtils.sys.mjs",
-  GenAI: "resource:///modules/GenAI.sys.mjs",
+  GenAI: "moz-src:///browser/components/genai/GenAI.sys.mjs",
   LinkPreview: "moz-src:///browser/components/genai/LinkPreview.sys.mjs",
   LoginHelper: "resource://gre/modules/LoginHelper.sys.mjs",
   LoginManagerContextMenu:
@@ -25,6 +25,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
   ScreenshotsUtils:
     "moz-src:///browser/components/screenshots/ScreenshotsUtils.sys.mjs",
+  SELECTION_MODES:
+    "moz-src:///browser/components/screenshots/ScreenshotsSelectionModes.sys.mjs",
   SearchService: "moz-src:///toolkit/components/search/SearchService.sys.mjs",
   SearchUIUtils: "moz-src:///browser/components/search/SearchUIUtils.sys.mjs",
   SearchUtils: "moz-src:///toolkit/components/search/SearchUtils.sys.mjs",
@@ -51,6 +53,13 @@ XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
   "TEXT_RECOGNITION_ENABLED",
   "dom.text-recognition.enabled",
+  false
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "AITAB_ENABLED",
+  "browser.smartwindow.aitab.enabled",
   false
 );
 
@@ -123,6 +132,23 @@ export class nsContextMenu {
    * @type {string}
    */
   #newFeatureBadgeL10nString;
+
+  /**
+   * Cancels the login lookup for this menu once the menu is gone, so that a
+   * result arriving late is discarded instead of being applied to a menu it was
+   * not looked up for.
+   *
+   * @type {?AbortController}
+   */
+  #passwordItemsAbortController = null;
+
+  /**
+   * Settles once the asynchronous part of the password manager items has been
+   * applied or discarded.
+   *
+   * @type {Promise<void>}
+   */
+  #passwordItemsReady = Promise.resolve();
 
   constructor(aXulMenu, aIsShift) {
     this.window = aXulMenu.documentGlobal;
@@ -346,6 +372,7 @@ export class nsContextMenu {
     aXulMenu.showHideSeparators = null;
 
     this.contentData = null;
+    this.#passwordItemsAbortController?.abort();
     this.window.InlineSpellCheckerUI.clearSuggestionsFromMenu();
     this.window.InlineSpellCheckerUI.clearDictionaryListFromMenu();
     this.window.InlineSpellCheckerUI.uninit();
@@ -912,6 +939,12 @@ export class nsContextMenu {
       showItem: this.showItem.bind(this),
       source: "page",
     });
+    this.showItem(
+      "context-create-aitab",
+      lazy.AITAB_ENABLED &&
+        lazy.AIWindow.isAIWindowActiveAndEnabled(this.window) &&
+        ["http", "https"].includes(this.browser.currentURI.scheme)
+    );
 
     // srcdoc cannot be opened separately due to concerns about web
     // content with about:srcdoc in location bar masquerading as trusted
@@ -1225,7 +1258,12 @@ export class nsContextMenu {
       }
 
       // Update sub-menu items.
-      this.updatePasswordManagerSubMenuItems(document, formOrigin);
+      this.#passwordItemsAbortController = new AbortController();
+      this.#passwordItemsReady = this.updatePasswordManagerSubMenuItems(
+        document,
+        formOrigin,
+        this.#passwordItemsAbortController.signal
+      );
     } finally {
       const documentURI = this.contentData?.documentURIObject;
       const showRelay =
@@ -1251,14 +1289,35 @@ export class nsContextMenu {
     }
   }
 
-  async updatePasswordManagerSubMenuItems(document, formOrigin) {
+  /**
+   * Settles once the password manager items are done being filled in, which
+   * happens after the menu is already shown. Tests await this instead of
+   * assuming the lookup won the race against `popupshown`.
+   *
+   * @type {Promise<void>}
+   */
+  get passwordItemsReady() {
+    return this.#passwordItemsReady;
+  }
+
+  /**
+   * @param {Document} document
+   *        The context menu owner document.
+   * @param {string} formOrigin
+   *        Origin of the document the menu was opened on.
+   * @param {AbortSignal} signal
+   *        Signalled when the menu these items were looked up for is gone.
+   */
+  async updatePasswordManagerSubMenuItems(document, formOrigin, signal) {
     const fragment = await lazy.LoginManagerContextMenu.addLoginsToMenu(
       this.targetIdentifier,
       this.browser,
       formOrigin
     );
 
-    if (!fragment) {
+    // The menu was dismissed while the logins were being looked up. Appending
+    // now would leave the items behind for whatever the menu shows next.
+    if (!fragment || signal.aborted) {
       return;
     }
 
@@ -1374,6 +1433,12 @@ export class nsContextMenu {
 
     this.showItem("context-sep-screenshots", shouldShow);
     this.showItem("context-take-screenshot", shouldShow);
+    this.showItem(
+      "context-use-mini-window",
+      shouldShow &&
+        Services.prefs.getBoolPref("browser.mini-window.enabled", false) &&
+        !this.document.documentElement.hasAttribute("mini-window")
+    );
   }
 
   initPasswordControlItems() {
@@ -1618,6 +1683,12 @@ export class nsContextMenu {
       "menuitem-screenshot",
       "ContextMenu"
     );
+  }
+
+  useMiniWindow() {
+    lazy.ScreenshotsUtils.toggle(this.browser, "MiniWindowContextMenu", {
+      mode: lazy.SELECTION_MODES.MINI_WINDOW,
+    });
   }
 
   // View Partial Source
@@ -2609,6 +2680,10 @@ export class nsContextMenu {
     this.window.openTrustedLinkIn(drmInfoURL, dest);
   }
 
+  createAITab() {
+    lazy.AIWindow.createAITab(this.window, [this.browser.currentURI.spec]);
+  }
+
   /**
    * Opens the SelectTranslationsPanel singleton instance.
    *
@@ -2875,7 +2950,7 @@ export class nsContextMenu {
       (isPrivateSearchMenuitem &&
         (isBrowserPrivate ||
           !Services.prefs.getBoolPref(
-            "browser.search.separatePrivateDefault.ui.enabled"
+            "browser.search.separatePrivateDefault.featureGate"
           )));
 
     if (!menuitem.hidden) {

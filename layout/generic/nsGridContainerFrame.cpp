@@ -5691,9 +5691,25 @@ void nsGridContainerFrame::Tracks::Initialize(
   mContentBoxSize = aContentBoxSize;
 }
 
-/**
- * Reflow aChild in the given aAvailableSize.
- */
+// A measuring reflow performed during intrinsic sizing leaves aChild laid out
+// with a size that generally might not be its final one. Mark it dirty up to
+// the nearest ancestor that is already dirty or being reflowed. Callers must
+// do this after reading whatever they need from aChild's measured state.
+static void MarkDirtyAfterIntrinsicSizingReflow(nsIFrame* aChild) {
+  aChild->MarkSubtreeDirty();
+  auto* cur = aChild;
+  while (true) {
+    nsIFrame* parent = cur->GetParent();
+    if (!parent || parent->IsSubtreeDirty() ||
+        parent->HasAnyStateBits(NS_FRAME_IN_REFLOW)) {
+      return;
+    }
+    parent->ChildIsDirty(cur);
+    cur = parent;
+  }
+}
+
+// Reflow aChild in the given aAvailableSize.
 static nscoord MeasuringReflow(nsIFrame* aChild,
                                const ReflowInput* aReflowInput, gfxContext* aRC,
                                const LogicalSize& aAvailableSize,
@@ -5923,16 +5939,10 @@ static nscoord ContentContribution(const GridItemInfo& aGridItem,
   const bool isOrthogonal = childWM.IsOrthogonalTo(gridWM);
   auto childAxis = isOrthogonal ? GetOrthogonalAxis(aAxis) : aAxis;
   if (size == NS_INTRINSIC_ISIZE_UNKNOWN && childAxis == LogicalAxis::Block) {
-    if (aGridRI.mIsGridIntrinsicSizing && aAxis == LogicalAxis::Block) {
-      // We may reach here while computing the grid container's min-content
-      // contribution in ComputeIntrinsicISize(), potentially during row size
-      // resolution. In this context, the main reason for computing row sizes is
-      // to transfer the child's block-size to the inline-axis via aspect-ratio,
-      // contributing to the grid container's intrinsic inline-size in a later
-      // column size resolution. Since an indefinite block-size cannot be
-      // transferred in this way, we can safely skip MeasuringReflow() and
-      // simply use zero as a dummy value because the value does not affect the
-      // result.
+    if (aGridRI.mIsGridIntrinsicSizing && aAxis == LogicalAxis::Block &&
+        !StaticPrefs::layout_css_grid_intrinsic_sizing_measure_bsize()) {
+      // FIXME: Remove this code-path once the stack overflow crashes it causes
+      // are figured out.
       size = 0;
     } else {
       // We need to reflow the child to find its BSize contribution.
@@ -6010,6 +6020,9 @@ static nscoord ContentContribution(const GridItemInfo& aGridItem,
       LogicalSize availableSize(childWM, availISize, availBSize);
       size = ::MeasuringReflow(child, aGridRI.mReflowInput, rc, availableSize,
                                cbSize, iMinSizeClamp, bMinSizeClamp);
+      if (aGridRI.mIsGridIntrinsicSizing) {
+        MarkDirtyAfterIntrinsicSizingReflow(child);
+      }
     }
     size += child->GetLogicalUsedMargin(childWM).BStartEnd(childWM);
     nscoord overflow = size - aMinSizeClamp;
@@ -6737,6 +6750,10 @@ void nsGridContainerFrame::Tracks::InitializeItemBaselines(
             baselineTrack, finalBaseline, alignSize, &gridItem});
       } else {
         state &= ~ItemState::eAllBaselineBits;
+      }
+
+      if (aGridRI.mIsGridIntrinsicSizing) {
+        MarkDirtyAfterIntrinsicSizingReflow(child);
       }
     }
 

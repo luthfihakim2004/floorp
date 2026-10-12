@@ -2436,21 +2436,13 @@ void AppWindow::SizeShell() {
     specHeight += windowDiff.height;
   }
 
-  bool positionSet = !mIgnoreXULPosition;
   nsCOMPtr<nsIAppWindow> parentWindow(do_QueryReferent(mParentWindow));
-#if defined(XP_UNIX) && !defined(XP_MACOSX)
-  // don't override WM placement on unix for independent, top-level windows
-  // (however, we think the benefits of intelligent dependent window placement
-  // trump that override.)
-  if (!parentWindow) positionSet = false;
-#endif
-  if (positionSet) {
-    // We have to do this before sizing the window, because sizing depends
-    // on the resolution of the screen we're on. But positioning needs to
-    // know the size so that it can constrain to screen bounds.... as an
-    // initial guess here, we'll use the specified size (if any).
-    positionSet = LoadPositionFromXUL(specWidth, specHeight);
-  }
+  // We have to do this before sizing the window, because sizing depends
+  // on the resolution of the screen we're on. But positioning needs to
+  // know the size so that it can constrain to screen bounds.... as an
+  // initial guess here, we'll use the specified size (if any).
+  bool positionSet =
+      !mIgnoreXULPosition && LoadPositionFromXUL(specWidth, specHeight);
 
   if (gotSize) {
     SetSpecifiedSize(specWidth, specHeight);
@@ -2647,6 +2639,17 @@ void AppWindow::SizeModeChanged(nsSizeMode aSizeMode) {
   // the state and pass the event on to the OS. The day is coming
   // when we'll handle the event here, and the return result will
   // then need to be different.
+}
+
+void AppWindow::FullscreenChangeFailed(bool aInFullscreen) {
+  // NotChanging means our own fullscreen state never moved, so no change of
+  // ours is going to finish and tell the window that its request is over. Do
+  // that here instead. When our state did move, SizeModeChanged() has already
+  // started a change that calls FinishFullscreenChange() when it completes,
+  // and calling it twice would send a second fullscreen event.
+  if (mFullscreenChangeState == FullscreenChangeState::NotChanging) {
+    FinishFullscreenChange(aInFullscreen);
+  }
 }
 
 void AppWindow::FullscreenWillChange(bool aInFullscreen) {
@@ -3157,6 +3160,12 @@ bool AppWindow::WidgetListenerDelegate::RequestWindowClose(nsIWidget* aWidget) {
 void AppWindow::WidgetListenerDelegate::SizeModeChanged(nsSizeMode aSizeMode) {
   RefPtr<AppWindow> holder = mAppWindow;
   holder->SizeModeChanged(aSizeMode);
+}
+
+void AppWindow::WidgetListenerDelegate::FullscreenChangeFailed(
+    bool aInFullscreen) {
+  RefPtr<AppWindow> holder = mAppWindow;
+  holder->FullscreenChangeFailed(aInFullscreen);
 }
 
 void AppWindow::WidgetListenerDelegate::MacFullscreenMenubarOverlapChanged(

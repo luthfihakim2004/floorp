@@ -29,7 +29,6 @@ import UrlbarPrefs from "chrome://browser/content/urlbar/UrlbarContentPrefs.mjs"
  *   The telemetry label for recording searches in this mode.
  * @property {string} uiLabel
  *   The L10n ID to use for the UI label.
- *   Has a value and an accesskey attribute.
  */
 
 /**
@@ -138,6 +137,25 @@ export const UrlbarShared = {
     // provider's parent-side engagement side effect, which lands after an actor
     // round-trip on the message path.
     PROVIDER_ENGAGEMENT: "onProviderEngagement",
+  }),
+
+  /**
+   * The UrlbarChildController/UrlbarInput/UrlbarView methods the parent may
+   * invoke over the `UrlbarChild` actor as an `InvokeContentAction` message.
+   *
+   * The parameters of these functions MUST be structured-clonable.
+   */
+  INVOKABLE_CONTENT_ACTIONS: Object.freeze({
+    controller: /** @type {const} */ (["notifyFromWire", "updateEngineStore"]),
+    input: /** @type {const} */ (["search", "setValue", "startQuery"]),
+    view: /** @type {const} */ ([
+      "acknowledgeFeedback",
+      "clearL10nCache",
+      "clearTopSitesCache",
+      "close",
+      "startTail150",
+      "updateResultMenuCommands",
+    ]),
   }),
 
   TOKEN_TYPE: Object.freeze({
@@ -336,6 +354,10 @@ export const UrlbarShared = {
     DEFAULT: "chrome://global/skin/icons/defaultFavicon.svg",
   },
 
+  // Size in `px` of icons in top-pick rows in the view. Should be kept in sync
+  // with the `--urlbarView-top-pick-icon-size` CSS variable.
+  TOP_PICK_ICON_SIZE: 58,
+
   // The number of results by which Page Up/Down move the selection.
   PAGE_UP_DOWN_DELTA: 5,
 
@@ -417,7 +439,7 @@ export const UrlbarShared = {
         icon: "chrome://browser/skin/bookmark.svg",
         pref: "shortcuts.bookmarks",
         telemetryLabel: "bookmarks",
-        uiLabel: "urlbar-searchmode-bookmarks3",
+        uiLabel: "urlbar-searchmode-bookmarks4",
       },
       {
         source: this.RESULT_SOURCE.TABS,
@@ -425,7 +447,7 @@ export const UrlbarShared = {
         icon: "chrome://browser/skin/open-tabs.svg",
         pref: "shortcuts.tabs",
         telemetryLabel: "tabs",
-        uiLabel: "urlbar-searchmode-tabs3",
+        uiLabel: "urlbar-searchmode-tabs4",
       },
       {
         source: this.RESULT_SOURCE.HISTORY,
@@ -433,7 +455,7 @@ export const UrlbarShared = {
         icon: "chrome://browser/skin/history.svg",
         pref: "shortcuts.history",
         telemetryLabel: "history",
-        uiLabel: "urlbar-searchmode-history3",
+        uiLabel: "urlbar-searchmode-history4",
       },
       {
         source: this.RESULT_SOURCE.ACTIONS,
@@ -441,7 +463,7 @@ export const UrlbarShared = {
         icon: "chrome://browser/skin/lightning-bolt.svg",
         pref: "shortcuts.actions",
         telemetryLabel: "actions",
-        uiLabel: "urlbar-searchmode-actions3",
+        uiLabel: "urlbar-searchmode-actions4",
       },
     ]);
   },
@@ -650,9 +672,14 @@ export const UrlbarShared = {
   },
 
   /**
-   * Whether a SAP is an input dedicated to querying a search engine -- the
+   * The SAPs that are inputs dedicated to querying a search engine -- the
    * toolbar search bar and New Tab's -- as opposed to the address bar and its
    * variants, whose search also covers history and bookmarks.
+   */
+  SEARCHBAR_SAPS: ["searchbar", "newtab_searchbar"],
+
+  /**
+   * Whether a SAP is one of SEARCHBAR_SAPS.
    *
    * @param {string} sapName
    *   The SAP name to check.
@@ -660,7 +687,7 @@ export const UrlbarShared = {
    *   Whether the SAP is dedicated to search-engine queries.
    */
   isSearchbarSAP(sapName) {
-    return sapName == "searchbar" || sapName == "newtab_searchbar";
+    return this.SEARCHBAR_SAPS.includes(sapName);
   },
 
   /**
@@ -675,6 +702,19 @@ export const UrlbarShared = {
    */
   keywordEnabled(sapName) {
     return this.isSearchbarSAP(sapName) || UrlbarPrefs.get("keyword.enabled");
+  },
+
+  /**
+   * Whether a string that is a URL may be navigated to. The toolbar search bar
+   * only searches; the address bar and New Tab's bar both navigate.
+   *
+   * @param {string} sapName
+   *   The SAP name to check.
+   * @returns {boolean}
+   *   Whether navigation is enabled.
+   */
+  navigationEnabled(sapName) {
+    return sapName != "searchbar";
   },
 
   /**
@@ -1778,6 +1818,21 @@ export const UrlbarShared = {
       this.__firstDayOfWeek ??= 7;
     }
     return this.__firstDayOfWeek;
+  },
+
+  /**
+   * Escapes a string for safe interpolation into an HTML document.
+   *
+   * @param {string} s
+   * @returns {string}
+   */
+  escapeHtmlEntities(s) {
+    return (s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   },
 };
 

@@ -7,29 +7,14 @@
 #include "mozilla/dom/HTMLOptionElement.h"
 #include "mozilla/dom/HTMLOptionsCollectionBinding.h"
 #include "mozilla/dom/HTMLSelectElement.h"
+#include "nsContentUtils.h"
 
 namespace mozilla::dom {
 
 // https://html.spec.whatwg.org/#concept-select-option-list
 bool HTMLOptionsCollection::IsValidOption(const HTMLOptionElement& aOption,
                                           const HTMLSelectElement& aRoot) {
-  bool seenOptgroup = false;
-  for (nsINode* ancestor = aOption.GetParent(); ancestor;
-       ancestor = ancestor->GetParentNode()) {
-    if (ancestor == &aRoot) {
-      return true;
-    }
-    if (HTMLOptionElement::IsOptionListBoundary(*ancestor)) {
-      return false;
-    }
-    if (ancestor->IsHTMLElement(nsGkAtoms::optgroup)) {
-      if (seenOptgroup) {
-        return false;
-      }
-      seenOptgroup = true;
-    }
-  }
-  return false;
+  return HTMLSelectElement::ComputeNearestAncestors(aOption).mSelect == &aRoot;
 }
 
 static bool MatchOption(Element* aElement, int32_t aNamespaceID, nsAtom* aAtom,
@@ -57,6 +42,8 @@ HTMLSelectElement* HTMLOptionsCollection::Select() const {
 nsresult HTMLOptionsCollection::GetOptionIndex(Element* aOption,
                                                int32_t aStartIndex,
                                                bool aForward, int32_t* aIndex) {
+  MOZ_ASSERT(!nsContentUtils::IsSafeToRunScript(),
+             "Callers must hold a script blocker");
   BringSelfUpToDate(true);
 
   // NOTE: aIndex shouldn't be set if the returned value isn't NS_OK.
