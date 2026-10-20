@@ -2152,6 +2152,31 @@ nsresult NS_GetSanitizedURIStringFromURI(nsIURI* aUri,
   return rv;
 }
 
+void NS_GetSanitizedSpecFromSpec(const nsACString& aSpec,
+                                 nsACString& aSanitizedSpec) {
+  aSanitizedSpec.Assign(aSpec);
+
+  // A password only ever reaches nsIURI through a userinfo component, and every
+  // nsIURI implementation that can report a non-empty password parses that
+  // component out of a literal '@' in the spec. Parsing a URI is far more
+  // expensive than scanning for that byte, so reject the common case first.
+  if (!aSpec.Contains('@')) {
+    return;
+  }
+
+  nsCOMPtr<nsIURI> uri;
+  nsAutoCString password;
+  if (NS_FAILED(NS_NewURI(getter_AddRefs(uri), aSpec)) ||
+      NS_FAILED(uri->GetPassword(password)) || password.IsEmpty()) {
+    return;
+  }
+
+  // The spec is known to carry a password, so never fall back to it.
+  if (NS_FAILED(NS_GetSanitizedURIStringFromURI(uri, aSanitizedSpec))) {
+    aSanitizedSpec.Truncate();
+  }
+}
+
 nsresult NS_LoadPersistentPropertiesFromURISpec(
     nsIPersistentProperties** outResult, const nsACString& aSpec) {
   nsCOMPtr<nsIURI> uri;
@@ -3104,9 +3129,10 @@ nsresult NS_ShouldSecureUpgrade(
     aShouldUpgrade = false;
     return NS_OK;
   }
-  // If it is a mixed content trustworthy loopback, then we shouldn't upgrade
-  // it.
-  if (nsMixedContentBlocker::IsPotentiallyTrustworthyLoopbackURL(aURI)) {
+  // If the target is already considered potentially trustworthy (loopback, a
+  // host on `dom.securecontext.allowlist`, or a .onion address), then it is
+  // not served over https and we shouldn't upgrade it.
+  if (nsMixedContentBlocker::IsPotentiallyTrustworthyOrigin(aURI)) {
     aShouldUpgrade = false;
     return NS_OK;
   }

@@ -70,6 +70,7 @@ import mozilla.components.feature.tab.collections.TabCollection
 import mozilla.components.feature.top.sites.presenter.DefaultTopSitesPresenter
 import mozilla.components.lib.state.ext.flow
 import mozilla.components.lib.state.ext.observeAsComposableState
+import mozilla.components.support.base.feature.UserInteractionHandler
 import mozilla.components.support.base.feature.ViewBoundFeatureWrapper
 import mozilla.components.support.ktx.android.view.createWindowInsetsController
 import mozilla.components.support.ktx.android.view.toScope
@@ -84,6 +85,7 @@ import org.mozilla.fenix.GleanMetrics.HomeScreen
 import org.mozilla.fenix.GleanMetrics.Vpn
 import org.mozilla.fenix.HomeActivity
 import org.mozilla.fenix.NavGraphDirections
+import org.mozilla.fenix.OnLongPressedListener
 import org.mozilla.fenix.R
 import org.mozilla.fenix.biometricauthentication.AuthenticationStatus
 import org.mozilla.fenix.biometricauthentication.BiometricAuthenticationManager
@@ -147,6 +149,7 @@ import org.mozilla.fenix.home.toolbar.FenixHomeToolbar
 import org.mozilla.fenix.home.toolbar.HomeNavigationBar
 import org.mozilla.fenix.home.toolbar.HomeToolbarComposable
 import org.mozilla.fenix.home.toolbar.HomeToolbarComposable.Companion.DirectToSearchConfig
+import org.mozilla.fenix.home.toolbar.homepageToolbarColors
 import org.mozilla.fenix.home.topsites.DefaultTopSitesView
 import org.mozilla.fenix.home.topsites.TopSitesBinding
 import org.mozilla.fenix.home.topsites.controller.DefaultTopSiteController
@@ -156,6 +159,7 @@ import org.mozilla.fenix.home.ui.HomeSwipeIntegration
 import org.mozilla.fenix.home.ui.Homepage
 import org.mozilla.fenix.home.ui.WallpaperBackground
 import org.mozilla.fenix.ipprotection.store.Surface as IPProtectionSurface
+import org.mozilla.fenix.ipprotection.ui.IPProtectionBottomSheetFragment
 import org.mozilla.fenix.messaging.DefaultMessageController
 import org.mozilla.fenix.messaging.FenixMessageSurfaceId
 import org.mozilla.fenix.messaging.MessagingFeature
@@ -174,6 +178,7 @@ import org.mozilla.fenix.reviewprompt.ShowReviewPromptBinding
 import org.mozilla.fenix.search.awesomebar.AwesomeBarComposable
 import org.mozilla.fenix.snackbar.FenixSnackbarDelegate
 import org.mozilla.fenix.snackbar.SnackbarBinding
+import org.mozilla.fenix.tabgroups.TabGroupsStrip
 import org.mozilla.fenix.tabstray.redux.state.Page
 import org.mozilla.fenix.tabstray.ui.AccessPoint
 import org.mozilla.fenix.termsofuse.store.DefaultPrivacyNoticeBannerRepository
@@ -194,7 +199,7 @@ import org.mozilla.fenix.wallpapers.Wallpaper
 
 /** The home screen. */
 @Suppress("TooManyFunctions", "LargeClass")
-class HomeFragment : Fragment() {
+class HomeFragment : Fragment(), UserInteractionHandler, OnLongPressedListener {
     private val args by navArgs<HomeFragmentArgs>()
 
     @VisibleForTesting internal lateinit var bundleArgs: Bundle
@@ -451,6 +456,7 @@ class HomeFragment : Fragment() {
         homeNavigationBar =
             HomeNavigationBar(
                 toolbarStore = toolbarStore,
+                appStore = activity.components.appStore,
                 browsingModeManager = activity.browsingModeManager,
                 settings = activity.components.settings,
                 hideWhenKeyboardShown = true,
@@ -727,16 +733,39 @@ class HomeFragment : Fragment() {
                                     ToolbarSlot(captureToolbarBounds, { toolbarBoundsInRoot = it }) {
                                         toolbarView.Content()
                                     }
+                                } else {
+                                    if (settings.shouldShowTabStripAtTop) {
+                                        TabStrip()
+                                    }
                                 }
                             },
                             bottomBar = {
+                                val tabGroupsStripColor =
+                                    homepageToolbarColors(
+                                            isPrivateMode = isPrivateMode,
+                                            shouldUseEdgeToEdgeColors = isEdgeToEdgeBackgroundEnabled(),
+                                        )
+                                        .surface
                                 if (isToolbarAtTop) {
                                     ToolbarSlot(captureToolbarBounds, { navbarBoundsInRoot = it }) {
-                                        homeNavigationBar?.Content()
+                                        Column {
+                                            if (settings.shouldShowTabStripAtBottom) {
+                                                TabStrip()
+                                            }
+                                            if (settings.shouldShowTabGroupsStrip) {
+                                                TabGroupsStrip(containerColor = tabGroupsStripColor)
+                                            }
+                                            homeNavigationBar?.Content()
+                                        }
                                     }
                                 } else {
                                     ToolbarSlot(captureToolbarBounds, { toolbarBoundsInRoot = it }) {
-                                        toolbarView.Content()
+                                        Column {
+                                            if (settings.shouldShowTabGroupsStrip) {
+                                                TabGroupsStrip(containerColor = tabGroupsStripColor)
+                                            }
+                                            toolbarView.Content()
+                                        }
                                     }
                                 }
                             },
@@ -942,6 +971,7 @@ class HomeFragment : Fragment() {
                         browsingModeManager = (requireActivity() as HomeActivity).browsingModeManager,
                         settings = requireComponents.settings,
                     ),
+                hideWhenKeyboardShown = requireComponents.settings.shouldUseBottomTabStrip,
                 onAddTabClick = {
                     if (requireComponents.settings.enableHomepageAsNewTab) {
                         requireComponents.useCases.fenixBrowserUseCases.addNewHomepageTab(
@@ -1136,6 +1166,50 @@ class HomeFragment : Fragment() {
         updateLastHomeActivity()
 
         findNavController().removeOnDestinationChangedListener(destinationChangedListener)
+    }
+
+    override fun onBackPressed(): Boolean {
+        if (context == null || !requireComponents.settings.enableHomepageAsNewTab) {
+            return false
+        }
+
+        return goBackFromHomepage(
+            browserStore = store,
+            navController = findNavController(),
+        )
+    }
+
+    override fun onBackLongPressed(): Boolean {
+        if (context == null || !requireComponents.settings.enableHomepageAsNewTab) {
+            return false
+        }
+
+        navigateToGlobalTabHistoryDialogFragment(navController = findNavController())
+        return true
+    }
+
+    override fun onForwardPressed(): Boolean {
+        if (context == null || !requireComponents.settings.enableHomepageAsNewTab) {
+            return false
+        }
+
+        return goForwardFromHomepage(
+            browserStore = store,
+            navController = findNavController(),
+        )
+    }
+
+    override fun onForwardLongPressed(): Boolean {
+        if (context == null || !requireComponents.settings.enableHomepageAsNewTab) {
+            return false
+        }
+
+        navigateToGlobalTabHistoryDialogFragment(navController = findNavController())
+        return true
+    }
+
+    private fun navigateToGlobalTabHistoryDialogFragment(navController: NavController) {
+        navController.navigate(NavGraphDirections.actionGlobalTabHistoryDialogFragment(activeSessionId = null))
     }
 
     private fun subscribeToTabCollections(): Observer<List<TabCollection>> {
@@ -1393,6 +1467,7 @@ class HomeFragment : Fragment() {
                     tabsUseCases = requireComponents.useCases.tabsUseCases,
                     sendTabUseCases = SendTabUseCases(requireComponents.backgroundServices.accountManager),
                     customTabSessionId = null,
+                    applicationScope = requireComponents.applicationScope,
                     viewHasFocus = { view.hasWindowFocus() },
                 ),
             owner = this,
@@ -1432,8 +1507,7 @@ class HomeFragment : Fragment() {
                     )
             },
             navigateToIpProtection = {
-                findNavController()
-                    .navigate(HomeFragmentDirections.actionGlobalIpProtectionDialog(IPProtectionSurface.HOMEPAGE))
+                IPProtectionBottomSheetFragment.showPrompt(fragment = this, surface = IPProtectionSurface.HOMEPAGE)
             },
         )
     }

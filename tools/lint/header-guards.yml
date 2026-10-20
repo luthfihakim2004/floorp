@@ -15,6 +15,7 @@ header-guards:
     - config/windows-h-constant.decls.h
     - config/windows-h-unicode.decls.h
     - dom/events/EventDispatcher.h
+    - dom/onnx/onnxruntime_ep_c_api.h
     - editor/txmgr/nsTransactionManagerCID.h
     - gfx/vr/service/oculus/ovr_capi_dynamic.h
     - gfx/src/X11UndefineNone.h
@@ -71,7 +72,6 @@ header-guards:
     - python/mozbuild/mozbuild/test/frontend/data/exports/pprthred.h
     - python/mozbuild/mozbuild/test/frontend/data/local_includes-filename/foo.h
     - toolkit/components/maintenanceservice/resource.h
-    - tools/clang-tidy/test/structures.h
   type: external
   payload: header_guards:lint
   support-files: ['tools/lint/header_guards/**']

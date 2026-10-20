@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "Cookie.h"
+#include "CookieDBWriteQueue.h"
 #include "CookieParser.h"
 #include "CookieStorage.h"
 #include "TestCommon.h"
@@ -680,7 +681,7 @@ TEST(TestCookie, TestCookieMain)
   SetACookie(cookieService, "https://prefixed.test/",
              "__Secure-test=test; secure");
   SetACookie(cookieService, "https://prefixed.test/",
-             "__Host-test=test; secure");
+             "__Host-test=test; secure; path=/");
   GetACookie(cookieService, "https://prefixed.test/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_CONTAIN, "__Secure-test=test"));
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_CONTAIN, "__Host-test=test"));
@@ -710,6 +711,21 @@ TEST(TestCookie, TestCookieMain)
              "__Host-g=test; secure; path=/some");
   GetACookie(cookieService, "https://host.prefixed.test/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_EQUAL, "__Host-f=test"));
+
+  // Host-prefixed cookies require an explicit Path attribute of "/": a default
+  // path that happens to be "/" is not enough.
+  SetACookie(cookieService, "https://explicit.prefixed.test/",
+             "__Host-h=test; secure");
+  SetACookie(cookieService, "https://explicit.prefixed.test/",
+             "__Host-i=test; secure; path=");
+  SetACookie(cookieService, "https://explicit.prefixed.test/",
+             "__Host-j=test; secure; path");
+  SetACookie(cookieService, "https://explicit.prefixed.test/",
+             "__Host-k=test; secure; path=relative");
+  SetACookie(cookieService, "https://explicit.prefixed.test/",
+             "__Host-l=test; secure; path=/");
+  GetACookie(cookieService, "https://explicit.prefixed.test/", cookie);
+  EXPECT_TRUE(CheckResult(cookie.get(), MUST_EQUAL, "__Host-l=test"));
 
   // *** leave-secure-alone tests
 
@@ -861,10 +877,10 @@ TEST(TestCookie, TestCookieMain)
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_CONTAIN, "test2=yes"));
   GetACookieNoHttp(cookieService, "http://cookiemgr.test/foo/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_NOT_CONTAIN, "test2=yes"));
-  // check CountCookiesFromHost()
+  // check CountCookiesFromHostNative()
   uint32_t hostCookies = 0;
-  EXPECT_TRUE(NS_SUCCEEDED(
-      cookieMgr2->CountCookiesFromHost("cookiemgr.test"_ns, &hostCookies)));
+  EXPECT_TRUE(NS_SUCCEEDED(cookieMgr2->CountCookiesFromHostNative(
+      "cookiemgr.test"_ns, &attrs, &hostCookies)));
   EXPECT_EQ(hostCookies, 2u);
   // check CookieExistsNative() using the third cookie
   bool found;
@@ -874,10 +890,10 @@ TEST(TestCookie, TestCookieMain)
 
   // sleep four seconds, to make sure the second cookie has expired
   PR_Sleep(4 * PR_TicksPerSecond());
-  // check that both CountCookiesFromHost() and CookieExistsNative() count the
-  // expired cookie
-  EXPECT_TRUE(NS_SUCCEEDED(
-      cookieMgr2->CountCookiesFromHost("cookiemgr.test"_ns, &hostCookies)));
+  // check that both CountCookiesFromHostNative() and CookieExistsNative() count
+  // the expired cookie
+  EXPECT_TRUE(NS_SUCCEEDED(cookieMgr2->CountCookiesFromHostNative(
+      "cookiemgr.test"_ns, &attrs, &hostCookies)));
   EXPECT_EQ(hostCookies, 2u);
   EXPECT_TRUE(NS_SUCCEEDED(cookieMgr2->CookieExistsNative(
       "cookiemgr.test"_ns, "/foo"_ns, "test2"_ns, &attrs, &found)));
@@ -1264,15 +1280,12 @@ class TestableCookieStorage final : public CookieStorage {
   void StaleCookies(const nsTArray<RefPtr<Cookie>>&, int64_t) override {}
   void Close() override {}
   void EnsureInitialized() override {}
-  nsresult RunInTransaction(nsICookieTransactionCallback*) override {
-    return NS_ERROR_NOT_IMPLEMENTED;
-  }
 
  protected:
   const char* NotificationTopic() const override { return "test-cookie"; }
   void NotifyChangedInternal(nsICookieNotification*, bool) override {}
   void RemoveAllInternal() override {}
-  void RemoveCookieFromDB(const Cookie&) override {}
+  void RemoveCookieFromDB(Cookie*) override {}
   void StoreCookie(const nsACString&, const OriginAttributes&,
                    Cookie*) override {}
 
@@ -1335,6 +1348,24 @@ TEST(TestCookie, RemoveOlderCookiesByBytesEntryFreed)
   EXPECT_FALSE(storage->mHostTable.GetEntry(key));
 }
 
+static bool HasCookiesForSite(CookieStorage* aStorage,
+                              const nsACString& aBaseDomain,
+                              const OriginAttributesPattern& aPattern) {
+  int64_t currentTimeInMSec = PR_Now() / PR_USEC_PER_MSEC;
+  bool hasCookies = false;
+
+  aStorage->ForEachCookie(aBaseDomain, aPattern, [&](Cookie* aCookie) {
+    if (aCookie->IsExpired(currentTimeInMSec)) {
+      return true;
+    }
+
+    hasCookies = true;
+    return false;
+  });
+
+  return hasCookies;
+}
+
 // Regression test for Bug 2041131: HasCookiesForSite must find cookies stored
 // under any OriginAttributes matching the pattern (containers, partitionKey,
 // …), not just the default-OA bucket.
@@ -1344,13 +1375,17 @@ TEST(TestCookie, HasCookiesForSite)
 
   nsAutoCString baseDomain("example.com"_ns);
 
-  auto addCookie = [&](const OriginAttributes& aAttrs) {
+  const int64_t nowInMSec = PR_Now() / PR_USEC_PER_MSEC;
+  const int64_t kFuture = nowInMSec + 86400 * 1000;
+  const int64_t kPast = nowInMSec - 1;
+
+  auto addCookie = [&](const OriginAttributes& aAttrs, int64_t aExpiryInMSec) {
     CookieStruct cookieData;
     cookieData.name() = "c"_ns;
     cookieData.value() = "v"_ns;
     cookieData.host() = "example.com"_ns;
     cookieData.path() = "/"_ns;
-    cookieData.expiryInMSec() = PR_Now() / PR_USEC_PER_MSEC + 86400 * 1000;
+    cookieData.expiryInMSec() = aExpiryInMSec;
     cookieData.lastAccessedInUSec() = 0;
     cookieData.creationTimeInUSec() = 0;
     cookieData.updateTimeInUSec() = 0;
@@ -1370,16 +1405,16 @@ TEST(TestCookie, HasCookiesForSite)
   nonPbPattern.mPrivateBrowsingId.Construct(0);
 
   // No cookies at all → false.
-  EXPECT_FALSE(storage->HasCookiesForSite(baseDomain, nonPbPattern));
-  EXPECT_FALSE(storage->HasCookiesForSite("other.test"_ns, nonPbPattern));
+  EXPECT_FALSE(HasCookiesForSite(storage, baseDomain, nonPbPattern));
+  EXPECT_FALSE(HasCookiesForSite(storage, "other.test"_ns, nonPbPattern));
 
   // Cookie in the default-OA bucket → true.
   OriginAttributes defaultAttrs;
-  addCookie(defaultAttrs);
-  EXPECT_TRUE(storage->HasCookiesForSite(baseDomain, nonPbPattern));
+  addCookie(defaultAttrs, kFuture);
+  EXPECT_TRUE(HasCookiesForSite(storage, baseDomain, nonPbPattern));
 
   // Different base domain still gets false.
-  EXPECT_FALSE(storage->HasCookiesForSite("other.test"_ns, nonPbPattern));
+  EXPECT_FALSE(HasCookiesForSite(storage, "other.test"_ns, nonPbPattern));
 
   // Cookie only in a container (userContextId != 0) → true. This is the
   // direct regression case from Bug 2041131.
@@ -1387,20 +1422,20 @@ TEST(TestCookie, HasCookiesForSite)
   storage = containerOnly;
   OriginAttributes containerAttrs;
   containerAttrs.mUserContextId = 1;
-  addCookie(containerAttrs);
-  EXPECT_TRUE(storage->HasCookiesForSite(baseDomain, nonPbPattern));
+  addCookie(containerAttrs, kFuture);
+  EXPECT_TRUE(HasCookiesForSite(storage, baseDomain, nonPbPattern));
 
   // PB-only cookie must NOT be visible to a non-PB pattern.
   RefPtr<TestableCookieStorage> pbOnly = TestableCookieStorage::Create();
   storage = pbOnly;
   OriginAttributes pbAttrs;
   pbAttrs.mPrivateBrowsingId = 1;
-  addCookie(pbAttrs);
-  EXPECT_FALSE(storage->HasCookiesForSite(baseDomain, nonPbPattern));
+  addCookie(pbAttrs, kFuture);
+  EXPECT_FALSE(HasCookiesForSite(storage, baseDomain, nonPbPattern));
   // And IS visible to a PB-matching pattern.
   OriginAttributesPattern pbPattern;
   pbPattern.mPrivateBrowsingId.Construct(1);
-  EXPECT_TRUE(storage->HasCookiesForSite(baseDomain, pbPattern));
+  EXPECT_TRUE(HasCookiesForSite(storage, baseDomain, pbPattern));
 
   // Partitioned-only cookie (non-default partitionKey) → true under
   // privateBrowsingId=0 pattern.
@@ -1409,6 +1444,52 @@ TEST(TestCookie, HasCookiesForSite)
   storage = partitionedOnly;
   OriginAttributes partAttrs;
   partAttrs.mPartitionKey = u"(http,other.test)"_ns;
-  addCookie(partAttrs);
-  EXPECT_TRUE(storage->HasCookiesForSite(baseDomain, nonPbPattern));
+  addCookie(partAttrs, kFuture);
+  EXPECT_TRUE(HasCookiesForSite(storage, baseDomain, nonPbPattern));
+
+  RefPtr<TestableCookieStorage> expiredOnly = TestableCookieStorage::Create();
+  storage = expiredOnly;
+  addCookie(defaultAttrs, kPast);
+  EXPECT_FALSE(HasCookiesForSite(storage, baseDomain, nonPbPattern));
+
+  OriginAttributes otherAttrs;
+  otherAttrs.mUserContextId = 2;
+  addCookie(otherAttrs, kFuture);
+  EXPECT_TRUE(HasCookiesForSite(storage, baseDomain, nonPbPattern));
 }
+
+namespace mozilla::net {
+
+TEST(TestCookieDBWriteQueue, Coalesce)
+{
+  using OpType = CookieDBWriteQueue::OpType;
+
+  EXPECT_EQ(CookieDBWriteQueue::Coalesce(OpType::Remove, OpType::Insert),
+            Some(OpType::RemoveAndInsert));
+  EXPECT_EQ(
+      CookieDBWriteQueue::Coalesce(OpType::RemoveAndInsert, OpType::Insert),
+      Some(OpType::RemoveAndInsert));
+
+  EXPECT_EQ(CookieDBWriteQueue::Coalesce(OpType::Insert, OpType::Update),
+            Some(OpType::Insert));
+  EXPECT_EQ(CookieDBWriteQueue::Coalesce(OpType::Update, OpType::Update),
+            Some(OpType::Update));
+  EXPECT_EQ(
+      CookieDBWriteQueue::Coalesce(OpType::RemoveAndInsert, OpType::Update),
+      Some(OpType::RemoveAndInsert));
+
+  // The insertion is still in this batch, so it never reached the disk and
+  // the row cancels out entirely.
+  EXPECT_EQ(CookieDBWriteQueue::Coalesce(OpType::Insert, OpType::Remove),
+            Nothing());
+
+  EXPECT_EQ(CookieDBWriteQueue::Coalesce(OpType::Update, OpType::Remove),
+            Some(OpType::Remove));
+  EXPECT_EQ(CookieDBWriteQueue::Coalesce(OpType::Remove, OpType::Remove),
+            Some(OpType::Remove));
+  EXPECT_EQ(
+      CookieDBWriteQueue::Coalesce(OpType::RemoveAndInsert, OpType::Remove),
+      Some(OpType::Remove));
+}
+
+}  // namespace mozilla::net

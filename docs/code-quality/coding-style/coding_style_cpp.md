@@ -390,7 +390,7 @@ For parts of this rule, clang-tidy provides the `modernize-use-using`
 check with autofixes.
 :::
 
-(header-files)=
+(cpp-header-files)=
 
 ## Header files
 
@@ -629,7 +629,7 @@ Foo::~Foo() = default;
 - The basic rule is that if you literally use a symbol in your file that
   is declared in a header A.h, include that header. In particular in header
   files, check if a forward declaration or including a forwarding header is
-  sufficient, see section {ref}`header-files`.
+  sufficient, see section {ref}`cpp-header-files`.
 
   There are cases where this basic rule is not sufficient. Some cases where
   you need to include additional headers are:
@@ -685,7 +685,7 @@ Foo::~Foo() = default;
   `nsWeakPtr` for weak references.
 - Don't use `QueryInterface` directly. Use `CallQueryInterface` or
   `do_QueryInterface` instead.
-- Use {ref}`Contract IDs <contract_ids>`,
+- Use {ref}`Contract IDs <contract-ids>`,
   instead of CIDs with `do_CreateInstance`/`do_GetService`.
 - Use pointers, instead of references for function out parameters, even
   for primitive types.

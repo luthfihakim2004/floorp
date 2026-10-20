@@ -10,7 +10,7 @@ minutes of work, spread out over an hour or two.
 - **Memory:** 4GB RAM minimum, 8GB+ recommended.
 - **Disk Space:** At least 30GB of free disk space.
 - **Operating System:** macOS - most recent or prior release. It is advisable
-  to upgrade to the latest “point” release. See {ref}`build_hosts` for more
+  to upgrade to the latest “point” release. See {ref}`build-hosts` for more
   information.
 
 ## 1. System preparation
@@ -46,7 +46,7 @@ python3 bootstrap.py
 ### Choosing a build type
 
 If you aren't modifying the Firefox backend, then select one of the
-{ref}`Artifact Mode <understanding-artifact-builds>` options. If you are
+[Artifact Mode](/contributing/build/artifact_builds.md) options. If you are
 building Firefox for Android, you should also see the {ref}`GeckoView Contributor Guide <geckoview-contributor-guide>`.
 
 ## 3. Build and Run
@@ -72,6 +72,8 @@ You can now use the `./mach run` command to run your locally built Firefox!
 
 If your build fails, please reference the steps in the [Troubleshooting section](#troubleshooting).
 
+(signing-local-macos-builds)=
+
 ### Signing
 
 Code signing your Mac build is not required for local testing and is rarely
@@ -82,15 +84,17 @@ See {ref}`signing-local-macos-builds` for more information.
 
 ### Running outside the development environment
 
-To test your changes on another macOS system (or to keep that particular Firefox around after new builds), you can't just use the generated application bundle (`obj-*/dist/Nightly[Debug].app`), since it contains symbolic links to other built libraries. Instead, build a distributable disk image with:
+To test your changes on another macOS system (or to keep that particular Firefox around after new builds), you can't just use the generated application bundle (`obj-*/dist/Nightly[Debug].app`), since it contains symbolic links to other built libraries. Instead, build a distributable archive with:
 
 ```shell
 ./mach package
 ```
 
-Copy the resulting `.dmg` file from `obj-*/dist/` to the target system,
-then double-click it as usual to find an `.app` bundle containing all
-dependencies.
+Copy the resulting `.tar` file from `obj-*/dist/` to the target system and
+extract it to find an `.app` bundle containing all dependencies. Builds
+configured with `--enable-release` produce a `.dmg` instead. To get a disk
+image from a developer build, add `export MOZ_PKG_FORMAT=DMG` to your
+mozconfig.
 
 On Apple Silicon Macs, you will need to sign the build for this to work using
 {ref}`signing-local-macos-builds`.

@@ -689,22 +689,42 @@ void MacroAssembler::maxPtr(Register lhs, ImmWord rhs, Register dest) {
 
 void MacroAssembler::minFloat32(FloatRegister other, FloatRegister srcDest,
                                 bool handleNaN) {
-  minMaxFloat32(srcDest, other, handleNaN, false);
+  minFloat32(other, srcDest, handleNaN, /* handleZero= */ true);
+}
+
+void MacroAssembler::minFloat32(FloatRegister other, FloatRegister srcDest,
+                                bool handleNaN, bool handleZero) {
+  minMaxFloat32(srcDest, other, handleNaN, handleZero, /* isMax= */ false);
 }
 
 void MacroAssembler::minDouble(FloatRegister other, FloatRegister srcDest,
                                bool handleNaN) {
-  minMaxDouble(srcDest, other, handleNaN, false);
+  minDouble(other, srcDest, handleNaN, /* handleZero= */ true);
+}
+
+void MacroAssembler::minDouble(FloatRegister other, FloatRegister srcDest,
+                               bool handleNaN, bool handleZero) {
+  minMaxDouble(srcDest, other, handleNaN, handleZero, /* isMax= */ false);
 }
 
 void MacroAssembler::maxFloat32(FloatRegister other, FloatRegister srcDest,
                                 bool handleNaN) {
-  minMaxFloat32(srcDest, other, handleNaN, true);
+  maxFloat32(other, srcDest, handleNaN, /* handleZero= */ true);
+}
+
+void MacroAssembler::maxFloat32(FloatRegister other, FloatRegister srcDest,
+                                bool handleNaN, bool handleZero) {
+  minMaxFloat32(srcDest, other, handleNaN, handleZero, /* isMax= */ true);
 }
 
 void MacroAssembler::maxDouble(FloatRegister other, FloatRegister srcDest,
                                bool handleNaN) {
-  minMaxDouble(srcDest, other, handleNaN, true);
+  maxDouble(other, srcDest, handleNaN, /* handleZero= */ true);
+}
+
+void MacroAssembler::maxDouble(FloatRegister other, FloatRegister srcDest,
+                               bool handleNaN, bool handleZero) {
+  minMaxDouble(srcDest, other, handleNaN, handleZero, /* isMax= */ true);
 }
 
 // ===============================================================
@@ -919,7 +939,7 @@ void MacroAssembler::popcnt64(Register64 input, Register64 output,
                               Register tmp) {
   UseScratchRegisterScope temps(asMasm());
   Register scratch = temps.Acquire();
-  as_or(output.reg, input.reg, zero);
+  ma_move(output.reg, input.reg);
   as_srai_d(tmp, input.reg, 1);
   ma_li(scratch, Imm32(0x55555555));
   as_bstrins_d(scratch, scratch, 63, 32);
@@ -952,7 +972,7 @@ void MacroAssembler::ctz32(Register src, Register dest, bool knownNotZero) {
 
 void MacroAssembler::popcnt32(Register input, Register output, Register tmp) {
   // Equivalent to GCC output of std::popcount()
-  as_or(output, input, zero);
+  ma_move(output, input);
   as_srai_w(tmp, input, 1);
   ma_and(tmp, tmp, Imm32(0x55555555));
   as_sub_w(output, output, tmp);
@@ -1103,8 +1123,6 @@ void MacroAssembler::branch8(Condition cond, const BaseIndex& lhs, Register rhs,
   Register scratch = temps.Acquire();
   MOZ_ASSERT(scratch != lhs.base);
 
-  computeScaledAddress(lhs, scratch);
-
   switch (cond) {
     case Assembler::Equal:
     case Assembler::NotEqual:
@@ -1112,7 +1130,7 @@ void MacroAssembler::branch8(Condition cond, const BaseIndex& lhs, Register rhs,
     case Assembler::AboveOrEqual:
     case Assembler::Below:
     case Assembler::BelowOrEqual:
-      load8ZeroExtend(Address(scratch, lhs.offset), scratch);
+      load8ZeroExtend(lhs, scratch);
       branch32(cond, scratch, rhs, label);
       break;
 
@@ -1120,7 +1138,7 @@ void MacroAssembler::branch8(Condition cond, const BaseIndex& lhs, Register rhs,
     case Assembler::GreaterThanOrEqual:
     case Assembler::LessThan:
     case Assembler::LessThanOrEqual:
-      load8SignExtend(Address(scratch, lhs.offset), scratch);
+      load8SignExtend(lhs, scratch);
       branch32(cond, scratch, rhs, label);
       break;
 

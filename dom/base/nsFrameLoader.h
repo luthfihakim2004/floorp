@@ -25,6 +25,7 @@
 #include "mozilla/dom/Nullable.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ReferrerPolicyBinding.h"
+#include "mozilla/dom/RemoteType.h"
 #include "mozilla/dom/WindowProxyHolder.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/layers/LayersTypes.h"
@@ -139,7 +140,7 @@ class nsFrameLoader final : public nsStubMutationObserver,
 
   NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
   nsresult CheckForRecursiveLoad(nsIURI* aURI);
-  nsresult ReallyStartLoading();
+  MOZ_CAN_RUN_SCRIPT nsresult ReallyStartLoading();
   void StartDestroy(bool aForProcessSwitch);
   void DestroyDocShell();
   void DestroyComplete();
@@ -406,7 +407,7 @@ class nsFrameLoader final : public nsStubMutationObserver,
   // `TryRemoteBrowser`, and a script blocker must be on the stack.
   //
   // |aContentParent|, if set, must have the remote type |aRemoteType|.
-  void ConfigRemoteProcess(const nsACString& aRemoteType,
+  void ConfigRemoteProcess(const mozilla::dom::RemoteType& aRemoteType,
                            mozilla::dom::ContentParent* aContentParent);
 
   // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
@@ -457,6 +458,8 @@ class nsFrameLoader final : public nsStubMutationObserver,
    *        null, in which case the node principal of the owner content is used.
    */
   nsresult CheckURILoad(nsIURI* aURI, nsIPrincipal* aTriggeringPrincipal);
+
+  MOZ_CAN_RUN_SCRIPT
   nsresult ReallyStartLoadingInternal();
 
   // Returns true if we have a remote browser or else attempts to create a
@@ -526,7 +529,7 @@ class nsFrameLoader final : public nsStubMutationObserver,
   // refcounted cycles early.
   RefPtr<mozilla::dom::SessionStoreChild> mSessionStoreChild;
 
-  nsCString mRemoteType;
+  mozilla::dom::RemoteType mRemoteType;
 
   bool mInitialized : 1;
   bool mDepthTooGreat : 1;

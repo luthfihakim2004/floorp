@@ -3,10 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
+import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
-const lazy = {};
-
-ChromeUtils.defineESModuleGetters(lazy, {
+const lazy = XPCOMUtils.declareLazy({
   ExperimentAPI: "resource://nimbus/ExperimentAPI.sys.mjs",
   FirefoxLabs: "resource://nimbus/FirefoxLabs.sys.mjs",
   NimbusEnrollments: "resource://nimbus/lib/Enrollments.sys.mjs",
@@ -16,14 +15,16 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "moz-src:///toolkit/profile/ProfilesDatastoreService.sys.mjs",
   RemoteSettingsSyncError:
     "resource://nimbus/lib/RemoteSettingsExperimentLoader.sys.mjs",
+  ShutdownStartedError:
+    "resource://nimbus/lib/RemoteSettingsExperimentLoader.sys.mjs",
   UnenrollmentCause: "resource://nimbus/lib/ExperimentManager.sys.mjs",
-});
 
-ChromeUtils.defineLazyGetter(lazy, "log", () => {
-  const { Logger } = ChromeUtils.importESModule(
-    "resource://messaging-system/lib/Logger.sys.mjs"
-  );
-  return new Logger("NimbusMigrations");
+  log: () => {
+    const { Logger } = ChromeUtils.importESModule(
+      "resource://messaging-system/lib/Logger.sys.mjs"
+    );
+    return new Logger("NimbusMigrations");
+  },
 });
 
 function isBackgroundTaskMode() {
@@ -275,26 +276,27 @@ async function migrateEnrollmentsToSql() {
  * the prefs set by the enrollment.
  *
  * @param {string} migration The name of the migration.
- * @param {string} slug The slug of the rollout.
+ * @param {string[]} slugs The slug of the rollout(s) to migrate out of.
  */
-function graduateLabs(migration, slug) {
+function graduateLabs(migration, slugs) {
   if (isBackgroundTaskMode()) {
     // This migration does not apply to background task mode.
     lazy.log.debug(`${migration}: skipping (is background task mode)`);
     return;
   }
 
-  const enrollment = lazy.ExperimentAPI.manager.store.get(slug);
-  if (!enrollment?.active) {
-    lazy.log.debug(`${migration}: skipping (no or inactive enrollment)`);
-    return;
-  }
+  for (const slug of slugs) {
+    const enrollment = lazy.ExperimentAPI.manager.store.get(slug);
+    if (!enrollment?.active) {
+      continue;
+    }
 
-  lazy.ExperimentAPI.manager._unenroll(
-    enrollment,
-    lazy.UnenrollmentCause.Migration(migration),
-    { unsetEnrollmentPrefs: false }
-  );
+    lazy.ExperimentAPI.manager._unenroll(
+      enrollment,
+      lazy.UnenrollmentCause.Migration(migration),
+      { unsetEnrollmentPrefs: false }
+    );
+  }
 }
 
 /**
@@ -309,7 +311,7 @@ function graduateLabs(migration, slug) {
  * update to exactly 145.
  */
 function migrateGraduateFirefoxLabsAutoPip(migration) {
-  graduateLabs(migration, "firefox-labs-auto-pip");
+  graduateLabs(migration, ["firefox-labs-auto-pip"]);
 }
 
 /**
@@ -319,13 +321,13 @@ function migrateGraduateFirefoxLabsAutoPip(migration) {
  * default in Nightly. We need to unenroll users without resetting the prefs
  * controlled by the feature.
  */
-function migrateGraduateFirefoxLabsJPEGXL(migration) {
+function migrateGraduateFirefoxLabsJPEGXLNightly(migration) {
   if (!AppConstants.MOZ_JXL) {
     lazy.log.debug(`${migration}: skipping (MOZ_JXL disabled)`);
     return;
   }
 
-  graduateLabs(migration, "firefox-labs-jpeg-xl");
+  graduateLabs(migration, ["firefox-labs-jpeg-xl"]);
 }
 
 function migrateRestorePrefFlipsBug2054546(migration) {
@@ -393,6 +395,19 @@ function migrateRestorePrefFlipsBug2054546(migration) {
     // reset this pref for all users.
     Services.prefs.clearUserPref("network.cookie.CHIPS.enabled");
   }
+}
+
+function migrateGraduateFirefoxLabsJPEGXLAllChannels(migration) {
+  if (!AppConstants.MOZ_JXL) {
+    lazy.log.debug(`${migration}: skipping (MOZ_JXL disabled)`);
+    return;
+  }
+
+  graduateLabs(migration, [
+    "firefox-labs-jpeg-xl-beta",
+    "firefox-labs-jpeg-xl-deved",
+    "firefox-labs-jpeg-xl-release",
+  ]);
 }
 
 /**
@@ -480,11 +495,24 @@ async function migrateFirefoxLabsEnrollments() {
 export class MigrationError extends Error {
   static Reason = Object.freeze({
     UNKNOWN: "unknown",
+    SHUTDOWN_STARTED: "shutdown-started",
   });
 
   constructor(reason) {
     super(`Migration error: ${reason}`);
     this.reason = reason;
+  }
+
+  static getReason(e) {
+    if (e instanceof MigrationError) {
+      return e.reason;
+    }
+
+    if (e instanceof lazy.ShutdownStartedError) {
+      return MigrationError.Reason.SHUTDOWN_STARTED;
+    }
+
+    return MigrationError.Reason.UNKNOWN;
   }
 }
 
@@ -530,10 +558,7 @@ export const NimbusMigrations = {
           `applyMigrations: error running migration ${i} (${migration.name}): ${e}`
         );
 
-        const reason =
-          e instanceof MigrationError
-            ? e.reason
-            : MigrationError.Reason.UNKNOWN;
+        const reason = MigrationError.getReason(e);
         lazy.NimbusTelemetry.recordMigration(migration.name, duration, reason);
 
         break;
@@ -608,9 +633,13 @@ export const NimbusMigrations = {
       ),
       migration(
         "graduate-firefox-labs-jpeg-xl",
-        migrateGraduateFirefoxLabsJPEGXL
+        migrateGraduateFirefoxLabsJPEGXLNightly
       ),
       migration("bug-2054546-mitigation", migrateRestorePrefFlipsBug2054546),
+      migration(
+        "graduate-firefox-labs-jpeg-xl-all-channels",
+        migrateGraduateFirefoxLabsJPEGXLAllChannels
+      ),
     ],
 
     [Phase.AFTER_REMOTE_SETTINGS_UPDATE]: [

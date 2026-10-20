@@ -49,7 +49,7 @@ add_task(async function amp() {
         index,
         suggestion: SUGGESTION,
         impressionOnly: {
-          pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
+          pingType: QUICK_SUGGEST_PING_TYPE.IMPRESSION,
           matchType,
           advertiser,
           blockId: SUGGESTION.id.toString(),
@@ -62,11 +62,11 @@ add_task(async function amp() {
           contextId: "",
           isClicked: false,
           reportingUrl: SUGGESTION.impression_url,
-          suggestionId: null,
+          suggestionId: SUGGESTION.suggestion_id,
         },
         click: [
           {
-            pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
+            pingType: QUICK_SUGGEST_PING_TYPE.IMPRESSION,
             matchType,
             advertiser,
             blockId: SUGGESTION.id.toString(),
@@ -79,10 +79,10 @@ add_task(async function amp() {
             contextId: "",
             isClicked: true,
             reportingUrl: SUGGESTION.impression_url,
-            suggestionId: null,
+            suggestionId: SUGGESTION.suggestion_id,
           },
           {
-            pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_SELECTION,
+            pingType: QUICK_SUGGEST_PING_TYPE.CLICK,
             matchType,
             advertiser,
             blockId: SUGGESTION.id.toString(),
@@ -94,7 +94,7 @@ add_task(async function amp() {
             source,
             contextId: "",
             reportingUrl: SUGGESTION.click_url,
-            suggestionId: null,
+            suggestionId: SUGGESTION.suggestion_id,
           },
         ],
         commands: [
@@ -102,7 +102,7 @@ add_task(async function amp() {
             command: "dismiss",
             pings: [
               {
-                pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
+                pingType: QUICK_SUGGEST_PING_TYPE.IMPRESSION,
                 matchType,
                 advertiser,
                 blockId: SUGGESTION.id.toString(),
@@ -115,10 +115,10 @@ add_task(async function amp() {
                 contextId: "",
                 isClicked: false,
                 reportingUrl: SUGGESTION.impression_url,
-                suggestionId: null,
+                suggestionId: SUGGESTION.suggestion_id,
               },
               {
-                pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_BLOCK,
+                pingType: QUICK_SUGGEST_PING_TYPE.BLOCK,
                 matchType,
                 advertiser,
                 blockId: SUGGESTION.id.toString(),
@@ -130,7 +130,7 @@ add_task(async function amp() {
                 source,
                 contextId: "",
                 iabCategory: SUGGESTION.iab_category,
-                suggestionId: null,
+                suggestionId: SUGGESTION.suggestion_id,
               },
             ],
           },
@@ -138,7 +138,7 @@ add_task(async function amp() {
             command: "manage",
             pings: [
               {
-                pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
+                pingType: QUICK_SUGGEST_PING_TYPE.IMPRESSION,
                 matchType,
                 advertiser,
                 blockId: SUGGESTION.id.toString(),
@@ -151,7 +151,7 @@ add_task(async function amp() {
                 contextId: "",
                 isClicked: false,
                 reportingUrl: SUGGESTION.impression_url,
-                suggestionId: null,
+                suggestionId: SUGGESTION.suggestion_id,
               },
             ],
           },
@@ -175,7 +175,7 @@ add_task(async function sponsoredBestMatch() {
     index,
     suggestion: SUGGESTION,
     impressionOnly: {
-      pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
+      pingType: QUICK_SUGGEST_PING_TYPE.IMPRESSION,
       matchType,
       advertiser,
       blockId: SUGGESTION.id.toString(),
@@ -188,11 +188,11 @@ add_task(async function sponsoredBestMatch() {
       contextId: "",
       isClicked: false,
       reportingUrl: SUGGESTION.impression_url,
-      suggestionId: null,
+      suggestionId: SUGGESTION.suggestion_id,
     },
     click: [
       {
-        pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
+        pingType: QUICK_SUGGEST_PING_TYPE.IMPRESSION,
         matchType,
         advertiser,
         blockId: SUGGESTION.id.toString(),
@@ -205,10 +205,10 @@ add_task(async function sponsoredBestMatch() {
         contextId: "",
         isClicked: true,
         reportingUrl: SUGGESTION.impression_url,
-        suggestionId: null,
+        suggestionId: SUGGESTION.suggestion_id,
       },
       {
-        pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_SELECTION,
+        pingType: QUICK_SUGGEST_PING_TYPE.CLICK,
         matchType,
         advertiser,
         blockId: SUGGESTION.id.toString(),
@@ -220,7 +220,7 @@ add_task(async function sponsoredBestMatch() {
         source,
         contextId: "",
         reportingUrl: SUGGESTION.click_url,
-        suggestionId: null,
+        suggestionId: SUGGESTION.suggestion_id,
       },
     ],
     commands: [
@@ -228,7 +228,7 @@ add_task(async function sponsoredBestMatch() {
         command: "dismiss",
         pings: [
           {
-            pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
+            pingType: QUICK_SUGGEST_PING_TYPE.IMPRESSION,
             matchType,
             advertiser,
             blockId: SUGGESTION.id.toString(),
@@ -241,10 +241,10 @@ add_task(async function sponsoredBestMatch() {
             contextId: "",
             isClicked: false,
             reportingUrl: SUGGESTION.impression_url,
-            suggestionId: null,
+            suggestionId: SUGGESTION.suggestion_id,
           },
           {
-            pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_BLOCK,
+            pingType: QUICK_SUGGEST_PING_TYPE.BLOCK,
             matchType,
             advertiser,
             blockId: SUGGESTION.id.toString(),
@@ -256,7 +256,7 @@ add_task(async function sponsoredBestMatch() {
             source,
             contextId: "",
             iabCategory: SUGGESTION.iab_category,
-            suggestionId: null,
+            suggestionId: SUGGESTION.suggestion_id,
           },
         ],
       },
@@ -264,7 +264,7 @@ add_task(async function sponsoredBestMatch() {
         command: "manage",
         pings: [
           {
-            pingType: CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
+            pingType: QUICK_SUGGEST_PING_TYPE.IMPRESSION,
             matchType,
             advertiser,
             blockId: SUGGESTION.id.toString(),
@@ -277,7 +277,7 @@ add_task(async function sponsoredBestMatch() {
             contextId: "",
             isClicked: false,
             reportingUrl: SUGGESTION.impression_url,
-            suggestionId: null,
+            suggestionId: SUGGESTION.suggestion_id,
           },
         ],
       },
