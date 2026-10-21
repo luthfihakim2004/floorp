@@ -54,7 +54,7 @@ ABIArg ABIArgGenerator::next(MIRType type) {
       floatRegIndex_++;
       break;
 
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
     case MIRType::Simd128:
       if (floatRegIndex_ == NumFloatArgRegs) {
         stackOffset_ = AlignBytes(stackOffset_, SimdMemoryAlignment);
@@ -233,6 +233,13 @@ BufferOffset Assembler::fImmPool64(ARMFPRegister dest, double value) {
 
 BufferOffset Assembler::fImmPool32(ARMFPRegister dest, float value) {
   return fImmPool(dest, (uint8_t*)&value, vixl::LDR_s_lit, LiteralDoc(value));
+}
+
+BufferOffset Assembler::fImmPool128(ARMFPRegister dest, const uint8_t* value) {
+  MOZ_ASSERT(dest.size() == 128);
+  uint8_t bytes[16];
+  memcpy(bytes, value, sizeof(bytes));
+  return fImmPool(dest, bytes, vixl::LDR_q_lit, LiteralDoc());
 }
 
 void Assembler::bind(Label* label, BufferOffset targetOffset) {

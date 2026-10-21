@@ -209,7 +209,10 @@ void nsTableCellFrame::DidSetComputedStyle(ComputedStyle* aOldComputedStyle) {
     uint32_t rowIndex = RowIndex();
     // row span needs to be clamped as we do not create rows in the cellmap
     // which do not have cells originating in them
-    TableArea damageArea(colIndex, rowIndex, GetColSpan(),
+    // col span needs to be clamped as the cellmap may not reflect it yet
+    TableArea damageArea(colIndex, rowIndex,
+                         std::min(static_cast<uint32_t>(GetColSpan()),
+                                  tableFrame->GetColCount() - colIndex),
                          std::min(static_cast<uint32_t>(GetRowSpan()),
                                   tableFrame->GetRowCount() - rowIndex));
     tableFrame->AddBCDamageArea(damageArea);
@@ -676,7 +679,7 @@ static nscoord CalcUnpaginatedBSize(nsTableCellFrame& aCellFrame,
   computedBSize -= aBlockDirBorderPadding;
   uint32_t rowX;
   for (row = firstRGInFlow->GetFirstRow(), rowX = 0; row;
-       row = row->GetNextRow(), rowX++) {
+       row = row->GetNextRowAcrossFragments(), rowX++) {
     if (rowX > rowIndex + rowSpan - 1) {
       break;
     } else if (rowX >= rowIndex) {
@@ -1042,7 +1045,7 @@ class nsDisplayTableCellSelection final : public nsPaintedDisplayItem {
   }
   NS_DISPLAY_DECL_NAME("TableCellSelection", TYPE_TABLE_CELL_SELECTION)
 
-  bool CreateWebRenderCommands(
+  WebRenderCommandsResult CreateWebRenderCommands(
       mozilla::wr::DisplayListBuilder& aBuilder,
       mozilla::wr::IpcResourceUpdateQueue& aResources,
       const StackingContextHelper& aSc,
@@ -1050,7 +1053,10 @@ class nsDisplayTableCellSelection final : public nsPaintedDisplayItem {
       nsDisplayListBuilder* aDisplayListBuilder) override {
     RefPtr<nsFrameSelection> frameSelection =
         mFrame->PresShell()->FrameSelection();
-    return !frameSelection->IsInTableSelectionMode();
+    if (frameSelection->IsInTableSelectionMode()) {
+      return Err("table selection decoration needs the fallback paint path");
+    }
+    return Ok();
   }
 };
 

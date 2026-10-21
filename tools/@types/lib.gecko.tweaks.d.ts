@@ -25,6 +25,11 @@ interface ChromeWindow extends Window {
   isChromeWindow: true;
 }
 
+// Defined by the <menu> custom element in toolkit/content/widgets/menu.js.
+interface XULMenuElement {
+  readonly menupopup: XULPopupElement;
+}
+
 interface XULElementTagNameMap {
   browser: MozBrowser;
   iframe: XULFrameElement;
@@ -35,6 +40,12 @@ interface XULElementTagNameMap {
 }
 
 interface Document {
+  // Map elements created in the SVG namespace to the relevant type.
+  createElementNS(
+    namespace: "http://www.w3.org/2000/svg",
+    qualifiedName: string,
+    options?: string | ElementCreationOptions
+  ): SVGElement;
   createXULElement<K extends keyof XULElementTagNameMap>(
     localName: K,
     options?: string | ElementCreationOptions

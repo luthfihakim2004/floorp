@@ -74,7 +74,6 @@
 #include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/ElementInlines.h"
-#include "mozilla/dom/FeaturePolicyUtils.h"
 #include "mozilla/dom/HTMLAudioElement.h"
 #include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/dom/HTMLMediaElementBinding.h"
@@ -85,8 +84,10 @@
 #include "mozilla/dom/MediaEncryptedEvent.h"
 #include "mozilla/dom/MediaErrorBinding.h"
 #include "mozilla/dom/MediaSource.h"
+#include "mozilla/dom/PermissionsPolicyUtils.h"
 #include "mozilla/dom/PlayPromise.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/Range.h"
 #include "mozilla/dom/TextTrack.h"
 #include "mozilla/dom/UserActivation.h"
 #include "mozilla/dom/VideoPlaybackQuality.h"
@@ -129,7 +130,6 @@
 #include "nsNodeInfoManager.h"
 #include "nsPresContext.h"
 #include "nsQueryObject.h"
-#include "nsRange.h"
 #include "nsSize.h"
 #include "nsThreadUtils.h"
 #include "nsURIHashKey.h"
@@ -456,8 +456,18 @@ class HTMLMediaElement::MediaControlKeyListener final
 
     MOZ_ASSERT(mControlAgent);
     auto* owner = Owner();
-    PositionState state(owner->Duration(),
-                        owner->Paused() ? 0.0 : owner->PlaybackRate(),
+    // `Duration()` is NaN while the element has neither a decoder nor a
+    // stream, and infinite for a stream. Neither is a length that a platform's
+    // media controls can lay a timeline out from, so report no position state
+    // at all instead.
+    const double duration = owner->Duration();
+    if (!std::isfinite(duration)) {
+      MEDIACONTROL_LOG("Clear media position state (duration={})", duration);
+      mControlAgent->UpdateGuessedPositionState(mOwnerBrowsingContextId,
+                                                mElementId, Nothing());
+      return;
+    }
+    PositionState state(duration, owner->Paused() ? 0.0 : owner->PlaybackRate(),
                         owner->CurrentTime(), TimeStamp::Now());
     MEDIACONTROL_LOG(
         "Notify media position state (duration={}, playbackRate={}, "
@@ -1034,7 +1044,7 @@ class HTMLMediaElement::MediaStreamRenderer {
     ResolveAudioDevicePromiseIfExists(__func__);
 
     RefPtr promise = mSetAudioDevicePromise.Ensure(__func__);
-    GenericPromise::AllSettled(GetCurrentSerialEventTarget(), promises)
+    GenericPromise::AllSettled(AbstractThread::MainThread(), promises)
         ->Then(GetMainThreadSerialEventTarget(), __func__,
                [self = RefPtr{this},
                 this](const GenericPromise::AllSettledPromiseType::
@@ -2279,6 +2289,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLMediaElement,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mIncomingMediaKeys)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSelectedVideoStreamTrack)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPendingPlayPromises)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPendingPlayPromisesRunners)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSeekDOMPromise)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSetMediaKeysDOMPromise)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEventBlocker)
@@ -2333,6 +2344,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLMediaElement,
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mIncomingMediaKeys)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mSelectedVideoStreamTrack)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mPendingPlayPromises)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mPendingPlayPromisesRunners)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mSeekDOMPromise)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mSetMediaKeysDOMPromise)
   if (tmp->mMediaControlKeyListener) {
@@ -2664,7 +2676,7 @@ void HTMLMediaElement::AbortExistingLoads() {
 
   bool hadVideo = HasVideo();
   mErrorSink->ResetError();
-  mCurrentPlayRangeStart = -1.0;
+  mCurrentPlayRangeStart = Nothing();
   mPlayed = new TimeRanges(ToSupports(OwnerDoc()));
   mLoadedDataFired = false;
   mCanAutoplayFlag = true;
@@ -2721,7 +2733,8 @@ void HTMLMediaElement::AbortExistingLoads() {
   if (IsVideo() && hadVideo) {
     // Ensure we render transparent black after resetting video resolution.
     Maybe<nsIntSize> size = Some(nsIntSize(0, 0));
-    Invalidate(ImageSizeChanged::Yes, size, ForceInvalidate::No);
+    Invalidate(ImageSizeChanged::Yes, size, Some(VideoRotation::kDegree_0),
+               ForceInvalidate::No);
   }
 
   // As aborting current load would stop current playback, so we have no need to
@@ -3766,12 +3779,12 @@ already_AddRefed<TimeRanges> HTMLMediaElement::Played() {
     ranges->Add(begin, end);
   }
 
-  if (mCurrentPlayRangeStart != -1.0) {
+  if (mCurrentPlayRangeStart) {
     double now = CurrentTime();
-    if (mCurrentPlayRangeStart != now) {
+    if (mCurrentPlayRangeStart.value() != now) {
       // Don't round the left of the interval: it comes from script and needs
       // to be exact.
-      ranges->Add(mCurrentPlayRangeStart, now);
+      ranges->Add(mCurrentPlayRangeStart.value(), now);
     }
   }
 
@@ -3789,6 +3802,7 @@ void HTMLMediaElement::Pause(ErrorResult& aRv) {
 }
 
 void HTMLMediaElement::PauseInternal() {
+  RefPtr<HTMLMediaElement> kungFuDeathGrip(this);
   if (mDecoder && mNetworkState != NETWORK_EMPTY) {
     mDecoder->Pause();
   }
@@ -5280,8 +5294,8 @@ void HTMLMediaElement::PlayInternal(bool aHandlingUserInput) {
     }
   }
 
-  if (mCurrentPlayRangeStart == -1.0) {
-    mCurrentPlayRangeStart = CurrentTime();
+  if (!mCurrentPlayRangeStart) {
+    mCurrentPlayRangeStart = Some(CurrentTime());
   }
 
   const bool oldPaused = mPaused;
@@ -6304,7 +6318,7 @@ void HTMLMediaElement::MetadataLoaded(const MediaInfo* aInfo,
   if (IsVideo() && HasVideo()) {
     QueueEvent(u"resize"_ns);
     Invalidate(ImageSizeChanged::No, Some(mMediaInfo.mVideo.mDisplay),
-               ForceInvalidate::No);
+               Nothing(), ForceInvalidate::No);
   }
   NS_ASSERTION(!HasVideo() || (mMediaInfo.mVideo.mDisplay.width > 0 &&
                                mMediaInfo.mVideo.mDisplay.height > 0),
@@ -6441,6 +6455,7 @@ void HTMLMediaElement::Error(uint16_t aErrorCode,
 }
 
 void HTMLMediaElement::PlaybackEnded() {
+  RefPtr<HTMLMediaElement> kungFuDeathGrip(this);
   // We changed state which can affect AddRemoveSelfReference
   AddRemoveSelfReference();
 
@@ -6491,23 +6506,24 @@ void HTMLMediaElement::UpdateSrcStreamReportPlaybackEnded() {
 void HTMLMediaElement::SeekStarted() { QueueEvent(u"seeking"_ns); }
 
 void HTMLMediaElement::UpdatePlayedRangesBeforeSeek(double aRangeEndTime) {
-  if (mPlayed && mCurrentPlayRangeStart != -1.0) {
+  if (mPlayed && mCurrentPlayRangeStart) {
     LOG(LogLevel::Debug,
         ("{} Adding 'played' a range : [{}, {}]", fmt::ptr(this),
-         mCurrentPlayRangeStart, aRangeEndTime));
+         mCurrentPlayRangeStart.value(), aRangeEndTime));
     // Multiple seek without playing, or seek while playing.
-    if (mCurrentPlayRangeStart != aRangeEndTime) {
+    if (mCurrentPlayRangeStart.value() != aRangeEndTime) {
       // Don't round the left of the interval: it comes from script and needs
       // to be exact.
-      mPlayed->Add(mCurrentPlayRangeStart, aRangeEndTime);
+      mPlayed->Add(mCurrentPlayRangeStart.value(), aRangeEndTime);
     }
     // Reset the current played range start time. We'll re-set it once
     // the seek completes.
-    mCurrentPlayRangeStart = -1.0;
+    mCurrentPlayRangeStart = Nothing();
   }
 }
 
 void HTMLMediaElement::SeekCompleted() {
+  RefPtr<HTMLMediaElement> kungFuDeathGrip(this);
   mPlayingBeforeSeek = false;
   SetPlayedOrSeeked(true);
   if (mTextTrackManager) {
@@ -6521,8 +6537,8 @@ void HTMLMediaElement::SeekCompleted() {
   QueueEvent(u"seeked"_ns);
   // We changed whether we're seeking so we need to AddRemoveSelfReference
   AddRemoveSelfReference();
-  if (mCurrentPlayRangeStart == -1.0) {
-    mCurrentPlayRangeStart = CurrentTime();
+  if (!mCurrentPlayRangeStart) {
+    mCurrentPlayRangeStart = Some(CurrentTime());
   }
 
   if (mSeekDOMPromise) {
@@ -6901,6 +6917,8 @@ void HTMLMediaElement::ChangeReadyState(nsMediaReadyState aState) {
     return;
   }
 
+  RefPtr<HTMLMediaElement> kungFuDeathGrip(this);
+
   nsMediaReadyState oldState = mReadyState;
   mReadyState = aState;
   LOG(LogLevel::Debug, ("{} Ready state changed to {}", fmt::ptr(this),
@@ -7130,8 +7148,8 @@ void HTMLMediaElement::RunAutoplay() {
 
   if (mDecoder) {
     SetPlayedOrSeeked(true);
-    if (mCurrentPlayRangeStart == -1.0) {
-      mCurrentPlayRangeStart = CurrentTime();
+    if (!mCurrentPlayRangeStart) {
+      mCurrentPlayRangeStart = Some(CurrentTime());
     }
     MOZ_ASSERT(!mSuspendedByInactiveDocOrDocshell);
     mDecoder->Play();
@@ -7379,10 +7397,14 @@ void HTMLMediaElement::NotifyDecoderPrincipalChanged() {
 
 void HTMLMediaElement::Invalidate(ImageSizeChanged aImageSizeChanged,
                                   const Maybe<nsIntSize>& aNewIntrinsicSize,
+                                  const Maybe<VideoRotation>& aNewRotation,
                                   ForceInvalidate aForceInvalidate) {
   nsIFrame* frame = GetPrimaryFrame();
-  if (aNewIntrinsicSize) {
-    UpdateMediaSize(aNewIntrinsicSize.value());
+  if (aNewIntrinsicSize || aNewRotation) {
+    // Whichever of size/rotation didn't change this cycle keeps its
+    // already-applied value from mMediaInfo.mVideo.
+    UpdateMediaSize(aNewIntrinsicSize.valueOr(mMediaInfo.mVideo.mDisplay),
+                    aNewRotation.valueOr(mMediaInfo.mVideo.mRotation));
     if (frame) {
       nsPresContext* presContext = frame->PresContext();
       PresShell* presShell = presContext->PresShell();
@@ -7407,15 +7429,28 @@ void HTMLMediaElement::Invalidate(ImageSizeChanged aImageSizeChanged,
   SVGObserverUtils::InvalidateDirectRenderingObservers(this);
 }
 
-void HTMLMediaElement::UpdateMediaSize(const nsIntSize& aSize) {
+static nsIntSize EffectiveVideoSize(const nsIntSize& aSize,
+                                    VideoRotation aRotation) {
+  if (aRotation == VideoRotation::kDegree_90 ||
+      aRotation == VideoRotation::kDegree_270) {
+    return nsIntSize(aSize.height, aSize.width);
+  }
+  return aSize;
+}
+
+void HTMLMediaElement::UpdateMediaSize(const nsIntSize& aSize,
+                                       VideoRotation aRotation) {
   MOZ_ASSERT(NS_IsMainThread());
 
   if (IsVideo() && mReadyState != HAVE_NOTHING &&
-      mMediaInfo.mVideo.mDisplay != aSize) {
+      EffectiveVideoSize(mMediaInfo.mVideo.mDisplay,
+                         mMediaInfo.mVideo.mRotation) !=
+          EffectiveVideoSize(aSize, aRotation)) {
     QueueEvent(u"resize"_ns);
   }
 
   mMediaInfo.mVideo.mDisplay = aSize;
+  mMediaInfo.mVideo.mRotation = aRotation;
   mWatchManager.ManualNotify(&HTMLMediaElement::UpdateReadyStateInternal);
 }
 
@@ -7503,6 +7538,29 @@ void HTMLMediaElement::NotifyOwnerDocumentActivityChanged() {
       ShutdownDecoder();
     }
   }
+
+#if defined(MOZ_WIDGET_ANDROID)
+  // Android-only probe (bug 2066141) to help the mobile product team
+  // answer how often background media playback happens. It is recorded when
+  // this element transitions to hidden while audibly playing (the app is
+  // backgrounded), once per background episode, and reset when the document
+  // becomes visible again. Picture-in-Picture is excluded, since there the
+  // document is hidden but the video is still visible to the user.
+  //
+  // This is a broad signal: it only fires on the foreground-to-background
+  // transition, so it does NOT capture all background media playback (for
+  // example media that starts or resumes while already backgrounded) and will
+  // under-count.
+  if (OwnerDoc()->Hidden() && !OwnerDoc()->InAndroidPipMode() && !mPaused &&
+      IsAudible()) {
+    if (!mRecordedBackgroundAudioPlayback) {
+      mRecordedBackgroundAudioPlayback = true;
+      glean::media::background_audio_playback.Record();
+    }
+  } else if (!OwnerDoc()->Hidden()) {
+    mRecordedBackgroundAudioPlayback = false;
+  }
+#endif
 
   AddRemoveSelfReference();
 }
@@ -7736,6 +7794,7 @@ bool HTMLMediaElement::ShouldQueueTimeupdateAsyncTask(
 
 void HTMLMediaElement::FireTimeUpdate(TimeupdateType aType) {
   NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
+  RefPtr<HTMLMediaElement> kungFuDeathGrip(this);
 
   if (ShouldQueueTimeupdateAsyncTask(aType)) {
     RefPtr<nsMediaEventRunner> runner =
@@ -8626,8 +8685,8 @@ already_AddRefed<Promise> HTMLMediaElement::SetSinkId(const nsAString& aSinkId,
     return nullptr;
   }
 
-  if (!FeaturePolicyUtils::IsFeatureAllowed(win->GetExtantDoc(),
-                                            u"speaker-selection"_ns)) {
+  if (!PermissionsPolicyUtils::IsFeatureAllowed(win->GetExtantDoc(),
+                                                u"speaker-selection"_ns)) {
     promise->MaybeRejectWithNotAllowedError(
         "Document's Permissions Policy does not allow setSinkId()");
   }

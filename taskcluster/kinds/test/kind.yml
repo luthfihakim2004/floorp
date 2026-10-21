@@ -40,6 +40,11 @@ tasks-from:
 
 task-defaults:
     run-on-repo-type: [hg]
+    priority:
+        by-project:
+            autoland: high
+            mozilla-central: medium
+            default: null
     attributes:
         retrigger: true
     use-python:
@@ -103,4 +108,4 @@ task-defaults:
                 default:
                     - linux64-minidump-stackwalk
                     - linux64-fix-stacks
-                    - linux64-python3.9-dbus-python
+                    - linux64-python3.10-dbus-python

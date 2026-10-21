@@ -80,10 +80,6 @@ class MockAudioReceiveStream : public webrtc::AudioReceiveStreamInterface {
 
   void SetJitterBufferFastAccelerate(bool fast_accelerate) override {}
 
-  std::vector<webrtc::RtpSource> GetSources() const override {
-    return mRtpSources;
-  }
-
   webrtc::AudioMixer::Source* source() override { return nullptr; }
 
   void SetRtcpMode(webrtc::RtcpMode mode) override {}
@@ -113,7 +109,6 @@ class MockAudioReceiveStream : public webrtc::AudioReceiveStreamInterface {
 
   const RefPtr<MockCallWrapper> mCallWrapper;
   webrtc::AudioReceiveStreamInterface::Stats mStats;
-  std::vector<webrtc::RtpSource> mRtpSources;
 };
 
 class MockVideoSendStream : public webrtc::VideoSendStream {
@@ -166,10 +161,6 @@ class MockVideoReceiveStream : public webrtc::VideoReceiveStreamInterface {
 
   Stats GetStats() const override { return mStats; }
 
-  std::vector<webrtc::RtpSource> GetSources() const override {
-    return std::vector<webrtc::RtpSource>();
-  }
-
   bool SetBaseMinimumPlayoutDelayMs(int delay_ms) override { return false; }
 
   int GetBaseMinimumPlayoutDelayMs() const override { return 0; }
@@ -204,6 +195,10 @@ class MockVideoReceiveStream : public webrtc::VideoReceiveStreamInterface {
 
   virtual void SetAssociatedPayloadTypes(
       std::map<int, int> associated_payload_types) override {}
+  
+  void SetDecoders(std::vector<Decoder> decoders) override {}
+
+  virtual void SetRawPayloadTypes(std::set<int> raw_payload_types) override {}
 
   virtual void UpdateRtxSsrc(uint32_t ssrc) override {};
 
@@ -231,9 +226,9 @@ class MockCall : public webrtc::Call {
   }
 
   webrtc::AudioReceiveStreamInterface* CreateAudioReceiveStream(
-      const webrtc::AudioReceiveStreamInterface::Config& config) override {
+      webrtc::AudioReceiveStreamInterface::Config config) override {
     MOZ_RELEASE_ASSERT(!mAudioReceiveConfig);
-    mAudioReceiveConfig = mozilla::Some(config);
+    mAudioReceiveConfig = mozilla::Some(std::move(config));
     return new MockAudioReceiveStream(mCallWrapper);
   }
   void DestroyAudioReceiveStream(

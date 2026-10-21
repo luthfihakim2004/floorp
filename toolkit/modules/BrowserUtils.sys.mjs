@@ -6,18 +6,18 @@ import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
 import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
-const lazy = {};
-ChromeUtils.defineESModuleGetters(lazy, {
+const lazy = XPCOMUtils.declareLazy({
   ReaderMode: "moz-src:///toolkit/components/reader/ReaderMode.sys.mjs",
   Region: "resource://gre/modules/Region.sys.mjs",
+  IDNService: {
+    service: "@mozilla.org/network/idn-service;1",
+    iid: Ci.nsIIDNService,
+  },
+  mathMLNonAnchorLinksDisabled: {
+    pref: "mathml.href_link_on_non_anchor_element.disabled",
+    default: false,
+  },
 });
-
-XPCOMUtils.defineLazyServiceGetter(
-  lazy,
-  "IDNService",
-  "@mozilla.org/network/idn-service;1",
-  Ci.nsIIDNService
-);
 
 ChromeUtils.defineLazyGetter(lazy, "CatManListenerManager", () => {
   const CatManListenerManager = {
@@ -194,6 +194,21 @@ export var BrowserUtils = {
   },
 
   /**
+   * Escapes a string for safe use in HTML text content or attribute values.
+   *
+   * @param {string} text
+   * @returns {string}
+   */
+  escapeHtmlEntities(text) {
+    return (text || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  },
+
+  /**
    * Copy multiple links to the clipboard. Writes three clipboard flavors:
    *   text/x-moz-url  — "url\ntitle" pairs separated by newlines
    *   text/html       — "<A HREF="url">title</A>" anchors separated by <BR>
@@ -202,19 +217,14 @@ export var BrowserUtils = {
    * @param {Array<{url: string, title: string}>} links
    */
   copyLinks(links) {
-    let htmlEscape = s =>
-      s
-        .replace(/&/g, "&amp;")
-        .replace(/>/g, "&gt;")
-        .replace(/</g, "&lt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&apos;");
-
     let mozURLData = links
       .map(({ url, title }) => `${url}\n${title}`)
       .join("\n");
     let htmlData = links
-      .map(({ url, title }) => `<A HREF="${url}">${htmlEscape(title)}</A>`)
+      .map(
+        ({ url, title }) =>
+          `<A HREF="${this.escapeHtmlEntities(url)}">${this.escapeHtmlEntities(title)}</A>`
+      )
       .join("<BR>\n");
     let textData = links.map(({ url }) => url).join("\n");
 
@@ -553,15 +563,18 @@ export var BrowserUtils = {
       if (
         aElement.localName == "a" ||
         (content.MathMLElement.isInstance(aElement) &&
-          !Services.prefs.getBoolPref(
-            "mathml.href_link_on_non_anchor_element.disabled"
-          ))
+          !lazy.mathMLNonAnchorLinksDisabled)
       ) {
         let href =
-          aElement.getAttribute("href") ||
+          aElement.getAttribute("href") ??
           aElement.getAttributeNS("http://www.w3.org/1999/xlink", "href");
+        // Note that empty string hrefs are valid, and distinct from missing
+        // attributes (null). Passing null to `URL.parse` will be stringified
+        // to "null" and when a base URI is present this may form a valid yet
+        // unintentional URL. So we explicitly check that we got a string.
         href =
-          URL.parse(href, aElement.ownerDocument.baseURIObject.spec)?.href ??
+          (typeof href == "string" &&
+            URL.parse(href, aElement.ownerDocument.baseURI)?.href) ??
           null;
         if (href) {
           // Don't return the aElement we got href from since callers expect
@@ -729,7 +742,9 @@ export var BrowserUtils = {
    * @param {string} options.categoryName
    *        What category's consumers to call.
    * @param {boolean} [options.idleDispatch=false]
-   *        If set to true, call each consumer in an idle task.
+   *        If set to true, call each consumer in an idle task. If jsGlobal is a
+   *        window that has closed by the time the idle task runs, the consumer
+   *        is dropped, so we don't initialize (and leak) a closing window.
    * @param {string} [options.profilerMarker=""]
    *        If specified, will create a profiler marker with the provided
    *        identifier for each consumer.
@@ -800,6 +815,12 @@ export var BrowserUtils = {
         allTasks.push(
           new Promise(resolve => {
             ChromeUtils.idleDispatch(() => {
+              // Drop the task if it targets a window that has closed in the
+              // meantime, to avoid initializing (and leaking) a closing window.
+              if (jsGlobal?.closed) {
+                resolve();
+                return;
+              }
               resolve(callSingleListener(listener));
             });
           })
@@ -943,6 +964,7 @@ let PromoInfo = {
     illegalRegions: [],
   },
   [BrowserUtils.PromoType.RELAY]: {
+    enabledPref: "browser.promo.relay.enabled",
     lazyStringSetPrefs: {},
     illegalRegions: [],
     // Returns true if user is using the FxA "production" instance, or returns
