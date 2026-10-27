@@ -6,7 +6,11 @@ import { actionCreators as ac } from "common/Actions.mjs";
 import { DSImage } from "../DSImage/DSImage.jsx";
 import { DSLinkMenu } from "../DSLinkMenu/DSLinkMenu";
 import { ImpressionStats } from "../../DiscoveryStreamImpressionStats/ImpressionStats";
-import { getActiveCardSize, getNovaColumnLayout } from "../../../lib/utils";
+import {
+  getActiveCardSize,
+  getCardColumn,
+  getNovaColumnLayout,
+} from "../../../lib/utils";
 import React from "react";
 import { SafeAnchor } from "../SafeAnchor/SafeAnchor";
 import {
@@ -294,6 +298,7 @@ export class _DSCard extends React.PureComponent {
 
   onLinkClick() {
     const matchesSelectedTopic = this.doesLinkTopicMatchSelectedTopic();
+    const cardColumn = getCardColumn(this.contextMenuButtonHostElement);
     if (this.props.dispatch) {
       this.props.dispatch(
         ac.DiscoveryStreamUserEvent({
@@ -311,11 +316,14 @@ export class _DSCard extends React.PureComponent {
             scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
             recommended_at: this.props.recommended_at,
             received_rank: this.props.received_rank,
+            variant_id: this.props.variant_id,
+            source_section_id: this.props.source_section_id,
             topic: this.props.topic,
             features: this.props.features,
             matches_selected_topic: matchesSelectedTopic,
             selected_topics: this.props.selectedTopics,
             attribution: this.props.attribution,
+            ...(cardColumn ? { card_column: cardColumn } : {}),
             ...(this.props.format
               ? { format: this.props.format }
               : {
@@ -336,45 +344,6 @@ export class _DSCard extends React.PureComponent {
                 }
               : {}),
           },
-        })
-      );
-
-      this.props.dispatch(
-        ac.ImpressionStats({
-          source: this.props.type.toUpperCase(),
-          click: 0,
-          window_inner_width: this.props.windowObj.innerWidth,
-          window_inner_height: this.props.windowObj.innerHeight,
-          tiles: [
-            {
-              id: this.props.id,
-              pos: this.props.pos,
-              ...(this.props.shim && this.props.shim.click
-                ? { shim: this.props.shim.click }
-                : {}),
-              type: this.props.flightId ? "spoc" : "organic",
-              topic: this.props.topic,
-              selected_topics: this.props.selectedTopics,
-              ...(this.props.format
-                ? { format: this.props.format }
-                : {
-                    format: getActiveCardSize(
-                      window.innerWidth,
-                      this.props.sectionsClassNames,
-                      this.props.section,
-                      this.props.flightId,
-                      getNovaColumnLayout(this.contextMenuButtonHostElement)
-                    ),
-                  }),
-              ...(this.props.section
-                ? {
-                    section: this.props.section,
-                    section_position: this.props.sectionPosition,
-                    is_section_followed: this.props.sectionFollowed,
-                  }
-                : {}),
-            },
-          ],
         })
       );
     }
@@ -679,6 +648,7 @@ export class _DSCard extends React.PureComponent {
           url={this.props.url}
           title={this.props.title}
           isSponsored={!!this.props.flightId}
+          dwellLabel={this.props.flightId ? "story_sponsored" : "story_organic"}
           tabIndex={this.props.tabIndex}
           onFocus={this.props.onFocus}
         >
@@ -700,9 +670,12 @@ export class _DSCard extends React.PureComponent {
                 scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
                 recommended_at: this.props.recommended_at,
                 received_rank: this.props.received_rank,
+                variant_id: this.props.variant_id,
+                source_section_id: this.props.source_section_id,
                 topic: this.props.topic,
                 features: this.props.features,
                 ...(format ? { format } : {}),
+                is_ad_eligible_position: this.props.is_ad_eligible_position,
                 category: this.props.category,
                 attribution: this.props.attribution,
                 ...(this.props.section
@@ -710,7 +683,7 @@ export class _DSCard extends React.PureComponent {
                       section: this.props.section,
                       section_position: this.props.sectionPosition,
                       is_section_followed: this.props.sectionFollowed,
-                      sectionLayoutName: this.props.sectionLayoutName,
+                      layout_name: this.props.sectionLayoutName,
                     }
                   : {}),
                 ...(!format && this.props.section

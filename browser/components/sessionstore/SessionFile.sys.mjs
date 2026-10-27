@@ -37,6 +37,14 @@ const PREF_MAX_SERIALIZE_FWD = "browser.sessionstore.max_serialize_forward";
 export var SessionFile = {
   /**
    * Read the contents of the session file, asynchronously.
+   *
+   * Resolves to the parsed session, along with `fileStates`: what we observed
+   * of each candidate file while looking for one to load, keyed by the names
+   * used in `Paths.loadOrder`. Values are "present" (the read did not report
+   * the file missing), "absent", "not_examined" (an earlier file loaded first,
+   * so we never looked) or "not_configured" (no upgrade backup was ever
+   * taken). It describes the search, not the contents of the profile
+   * directory, and is only complete when nothing could be loaded.
    */
   read() {
     return SessionFileInternal.read();
@@ -200,11 +208,22 @@ var SessionFileInternal = {
 
   async _readInternal(useOldExtension) {
     let result;
-    let noFilesFound = true;
     this._usingOldExtension = useOldExtension;
 
+    let loadOrder = this.Paths.loadOrder;
+    /** @type {Record<string, string>} */
+    let fileStates = {};
+    for (let key of loadOrder) {
+      fileStates[key] = "not_examined";
+    }
+    if (!("upgradeBackup" in fileStates)) {
+      // `upgradeBackup` is absent from the load order when no upgrade backup
+      // was ever taken, which is distinct from the file having gone missing.
+      fileStates.upgradeBackup = "not_configured";
+    }
+
     // Attempt to load by order of priority from the various backups
-    for (let key of this.Paths.loadOrder) {
+    for (let key of loadOrder) {
       let corrupted = false;
       let exists = true;
       try {
@@ -262,6 +281,7 @@ var SessionFileInternal = {
             loadfail_reason:
               "Wrong format/version: " + JSON.stringify(parsed.version) + ".",
           });
+          corrupted = true;
           continue;
         }
         result = {
@@ -275,7 +295,6 @@ var SessionFileInternal = {
           path_key: key,
           loadfail_reason: "N/A",
         });
-        Glean.sessionRestore.corruptFile.false.add();
         Glean.sessionRestore.readFile.accumulateSingleSample(
           Date.now() - startMs
         );
@@ -338,32 +357,63 @@ var SessionFileInternal = {
             path_key: key,
             loadfail_reason: ` ${ex.name}: Corrupt session file (invalid JSON found)`,
           });
+        } else {
+          corrupted = true;
+          lazy.sessionStoreLogger.error(
+            `Unexpected error when reading session file: ${key}`,
+            ex
+          );
+          Glean.sessionRestore.backupCanBeLoadedSessionFile.record({
+            can_load: "false",
+            path_key: key,
+            loadfail_reason: ` ${ex.name}: Could not read session file`,
+          });
         }
       } finally {
+        fileStates[key] = exists ? "present" : "absent";
         if (exists) {
-          noFilesFound = false;
           Glean.sessionRestore.corruptFile[corrupted ? "true" : "false"].add();
-          Glean.sessionRestore.backupCanBeLoadedSessionFile.record({
-            can_load: (!corrupted).toString(),
-            path_key: key,
-            loadfail_reason: "N/A",
-          });
         }
       }
     }
-    return { result, noFilesFound };
+    return { result, fileStates };
+  },
+
+  /**
+   * Combine the file states observed by the two format passes, keeping the
+   * strongest observation for each key: a file seen in either format counts as
+   * present, and a file looked for in either format counts as examined.
+   */
+  _mergeFileStates(first, second) {
+    /** @type {Record<string, string>} */
+    let merged = {};
+    for (let key of Object.keys(first)) {
+      if (first[key] == "present" || second[key] == "present") {
+        merged[key] = "present";
+      } else if (first[key] == "absent" || second[key] == "absent") {
+        merged[key] = "absent";
+      } else {
+        merged[key] = first[key];
+      }
+    }
+    return merged;
   },
 
   // Find the correct session file and read it.
   async read() {
     // Load session files with lz4 compression.
-    let { result, noFilesFound } = await this._readInternal(false);
+    let { result, fileStates } = await this._readInternal(false);
     if (!result) {
       // No result? Probably because of migration, let's
       // load uncompressed session files.
       let r = await this._readInternal(true);
       result = r.result;
+      fileStates = this._mergeFileStates(fileStates, r.fileStates);
     }
+
+    let noFilesFound = !Object.values(fileStates).some(
+      state => state == "present"
+    );
 
     // All files are corrupted if files found but none could deliver a result.
     let allCorrupt = !noFilesFound && !result;
@@ -383,9 +433,7 @@ var SessionFileInternal = {
     }
     this._readOrigin = result.origin;
 
-    result.noFilesFound = noFilesFound;
-
-    return result;
+    return { ...result, noFilesFound, fileStates };
   },
 
   // Initialize SessionWriter and return it as a resolved promise.
@@ -440,10 +488,10 @@ var SessionFileInternal = {
 
     this._attempts++;
     let options = { isFinalWrite, performShutdownCleanup };
-    let promise = this.getWriter().then(writer => writer.write(aData, options));
+    let write = this.getWriter().then(writer => writer.write(aData, options));
 
     // Wait until the write is done.
-    promise = promise.then(
+    let promise = write.then(
       msg => {
         // Record how long the write took.
         if (msg.telemetry.writeFileMs) {

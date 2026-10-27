@@ -35,6 +35,7 @@
 #include "mozilla/dom/AutocompleteInfoBinding.h"
 #include "mozilla/dom/BlobImpl.h"
 #include "mozilla/dom/CustomEvent.h"
+#include "mozilla/dom/DirectionalityUtils.h"
 #include "mozilla/dom/Directory.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/DocumentInlines.h"
@@ -829,9 +830,9 @@ nsTArray<nsString> HTMLInputElement::GetColorsFromList() {
   nsTArray<nsString> colors;
 
   RefPtr<ContentList> options = dataList->Options();
-  uint32_t length = options->Length(true);
+  uint32_t length = options->Length();
   for (uint32_t i = 0; i < length; ++i) {
-    auto* option = HTMLOptionElement::FromNodeOrNull(options->Item(i, false));
+    auto* option = HTMLOptionElement::FromNodeOrNull(options->Item(i));
     if (!option) {
       continue;
     }
@@ -1158,8 +1159,7 @@ HTMLInputElement::HTMLInputElement(already_AddRefed<dom::NodeInfo> aNodeInfo,
       mHasBeenTypePassword(false),
       mHasPatternAttribute(false),
       mUserChangedSinceFocus(false),
-      mIsUserInteracting(false),
-      mRadioGroupContainer(nullptr) {
+      mIsUserInteracting(false) {
   // If size is above 512, mozjemalloc allocates 1kB, see
   // memory/build/mozjemalloc.cpp
   static_assert(sizeof(HTMLInputElement) <= 512,
@@ -1240,6 +1240,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLInputElement,
                                                   TextControlElement)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mValidity)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mControllers)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRadioGroupContainer)
   if (tmp->IsSingleLineTextControl(false) && tmp->mInputData.mState) {
     tmp->mInputData.mState->Traverse(cb);
   }
@@ -1253,6 +1254,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLInputElement,
                                                 TextControlElement)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mValidity)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mControllers)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mRadioGroupContainer)
   if (tmp->IsSingleLineTextControl(false) && tmp->mInputData.mState) {
     tmp->mInputData.mState->Unlink();
   }
@@ -4636,7 +4638,8 @@ void HTMLInputElement::MaybeDispatchLoginManagerEvents(HTMLFormElement* aForm) {
     } else {
       nsAutoString autocompleteValue;
       GetAutocomplete(autocompleteValue);
-      if (!autocompleteValue.EqualsASCII("username")) {
+      if (!autocompleteValue.EqualsASCII("username") &&
+          !autocompleteValue.EqualsASCII("webauthn")) {
         return;
       }
       target = GetComposedDoc();
@@ -5712,8 +5715,7 @@ nsChangeHint HTMLInputElement::GetAttributeChangeHint(
   return retval;
 }
 
-NS_IMETHODIMP_(bool)
-HTMLInputElement::IsAttributeMapped(const nsAtom* aAttribute) const {
+bool HTMLInputElement::IsNoNamespaceAttrMapped(const nsAtom* aAttribute) const {
   static const MappedAttributeEntry attributes[] = {
       {nsGkAtoms::align},
       {nullptr},

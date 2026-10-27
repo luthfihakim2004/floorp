@@ -259,6 +259,77 @@ add_task(async function test_expand_on_hover_pinned_tabs() {
   await SidebarController.waitUntilStable();
 });
 
+add_task(async function test_expand_on_hover_pinned_tab_close_button() {
+  await SpecialPowers.pushPrefEnv({
+    set: [[SIDEBAR_VISIBILITY_PREF, "expand-on-hover"]],
+  });
+  await TestUtils.waitForCondition(
+    () => document.documentElement.hasAttribute("sidebar-expand-on-hover"),
+    "Expand on hover is enabled"
+  );
+  await SidebarController.waitUntilStable();
+
+  let unpinnedTab = await BrowserTestUtils.openNewForegroundTab(
+    gBrowser,
+    "data:text/html,<title>unpinned</title>"
+  );
+  let pinnedTabs = [];
+  for (let i = 0; i < 2; i++) {
+    let tab = await BrowserTestUtils.openNewForegroundTab(
+      gBrowser,
+      `data:text/html,<title>pinned ${i + 1}</title>`
+    );
+    gBrowser.pinTab(tab);
+    pinnedTabs.push(tab);
+  }
+  let [unselectedPinnedTab, selectedPinnedTab] = pinnedTabs;
+  is(gBrowser.selectedTab, selectedPinnedTab, "A pinned tab is selected");
+
+  await mouseOverSidebarToExpand();
+  await BrowserTestUtils.waitForMutationCondition(
+    gBrowser.tabContainer,
+    { attributes: true, attributeFilter: ["expanded"] },
+    () => gBrowser.tabContainer.hasAttribute("expanded"),
+    { msg: "The tab container is expanded" }
+  );
+
+  ok(
+    BrowserTestUtils.isHidden(selectedPinnedTab.closeButton),
+    "The selected pinned tab is not showing the close button."
+  );
+
+  window.windowUtils.disableNonTestMouseEvents(true);
+  const hoverTab = (tab, msg) =>
+    TestUtils.waitForCondition(() => {
+      EventUtils.synthesizeMouseAtCenter(tab, { type: "mousemove" });
+      return tab.matches(":hover");
+    }, msg);
+
+  await hoverTab(unselectedPinnedTab, "The unselected pinned tab is hovered");
+  ok(
+    BrowserTestUtils.isHidden(unselectedPinnedTab.closeButton),
+    "The hovered pinned tab is not showing the close button."
+  );
+
+  await hoverTab(unpinnedTab, "The unpinned tab is hovered");
+  ok(
+    BrowserTestUtils.isVisible(unpinnedTab.closeButton),
+    "The hovered unpinned tab is showing the close button."
+  );
+  window.windowUtils.disableNonTestMouseEvents(false);
+
+  await mouseOutSidebarToCollapse();
+  for (let tab of [...pinnedTabs, unpinnedTab]) {
+    BrowserTestUtils.removeTab(tab);
+  }
+  await SpecialPowers.popPrefEnv();
+  await TestUtils.waitForCondition(
+    () => !document.documentElement.hasAttribute("sidebar-expand-on-hover"),
+    "Expand on hover is disabled"
+  );
+  await SidebarController.waitUntilStable();
+});
+
 add_task(
   async function test_expand_on_hover_persists_through_vertical_tabs_toggle() {
     await SpecialPowers.pushPrefEnv({
@@ -538,5 +609,38 @@ add_task(async function test_overflow_chevron_visible_while_collapsed() {
     "The chevron is not clipped above the buttons wrapper."
   );
 
+  await SpecialPowers.popPrefEnv();
+});
+
+// Disabling expand on hover has to restore the height on the same element it
+// collapsed. See bug 1971922.
+add_task(async function test_tools_height_restored_on_disable() {
+  await SpecialPowers.pushPrefEnv({
+    set: [[SIDEBAR_VISIBILITY_PREF, "expand-on-hover"]],
+  });
+
+  const { sidebarMain: main, _state: state } = SidebarController;
+  main.expanded = false;
+  await main.updateComplete;
+  state.collapsedToolsHeight = 120;
+
+  await SidebarController.toggleExpandOnHover(true);
+  await SidebarController.waitUntilStable();
+  Assert.equal(
+    main.buttonsWrapper.style.height,
+    "0px",
+    "Enabling expand on hover collapses the tools."
+  );
+
+  await SidebarController.toggleExpandOnHover(false);
+  await SidebarController.waitUntilStable();
+  Assert.equal(
+    main.buttonsWrapper.style.height,
+    "120px",
+    "Disabling expand on hover restores the stored height, with units."
+  );
+
+  state.collapsedToolsHeight = undefined;
+  state.updateToolsHeight();
   await SpecialPowers.popPrefEnv();
 });

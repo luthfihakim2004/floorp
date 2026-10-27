@@ -98,9 +98,9 @@ if CONFIG["CC_TYPE"] == "gcc":
         "-Wno-maybe-uninitialized",
     ]
 
-SPHINX_TREES["url-classifier"] = "docs"
-
-with Files("docs/**"):
-    SCHEDULES.exclusive = ["docs"]
-
 include("/ipc/chromium/chromium-config.mozbuild")
+
+LICENSED_UNDER += ["chromium"]
+LICENSED_UNDER["chromium"].paths = [
+    "chromium",
+]

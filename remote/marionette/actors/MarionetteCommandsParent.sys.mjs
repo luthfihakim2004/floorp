@@ -9,8 +9,11 @@ ChromeUtils.defineESModuleGetters(lazy, {
   error: "chrome://remote/content/shared/webdriver/Errors.sys.mjs",
   getSeenNodesForBrowsingContext:
     "chrome://remote/content/shared/webdriver/Session.sys.mjs",
+  isPrivilegedContext:
+    "chrome://remote/content/shared/BrowsingContextUtils.sys.mjs",
   json: "chrome://remote/content/marionette/json.sys.mjs",
   Log: "chrome://remote/content/shared/Log.sys.mjs",
+  RemoteAgent: "chrome://remote/content/components/RemoteAgent.sys.mjs",
 });
 
 ChromeUtils.defineLazyGetter(lazy, "logger", () =>
@@ -346,6 +349,12 @@ export class MarionetteCommandsParent extends JSWindowActorParent {
       }
     );
 
+    if (rect.width === 0 || rect.height === 0) {
+      throw new lazy.error.UnableToCaptureScreen(
+        `The dimensions of requested screenshot are incorrect, got width: ${rect.width} and height: ${rect.height}.`
+      );
+    }
+
     // If no element has been specified use the top-level browsing context.
     // Otherwise use the browsing context from the currently selected frame.
     const browsingContext = webEl
@@ -382,8 +391,25 @@ export class MarionetteCommandsParent extends JSWindowActorParent {
  * @param {function(): BrowsingContext} browsingContextFn
  *     A function that returns the reference to the browsing context for which
  *     the query should run.
+ * @param {object=} options
+ * @param {boolean=} options.skipPrivilegeCheck
+ *     If true, the command is allowed to be forwarded to a privileged content
+ *     browsing context even without system access. Defaults to false, which
+ *     prevents the command from reaching a content browsing context that
+ *     became privileged after it was dispatched. Should only be set for
+ *     commands that are safe regardless of the context's privilege level.
+ *
+ * @throws {NoSuchWindowError}
+ *     Browsing context has been discarded.
+ * @throws {UnsupportedOperationError}
+ *     Not supported for browsing contexts in privileged scope.
  */
-export function getMarionetteCommandsActorProxy(browsingContextFn) {
+export function getMarionetteCommandsActorProxy(
+  browsingContextFn,
+  options = {}
+) {
+  const { skipPrivilegeCheck = false } = options;
+
   const MAX_ATTEMPTS = 10;
 
   /**
@@ -422,6 +448,23 @@ export function getMarionetteCommandsActorProxy(browsingContextFn) {
               throw new lazy.error.NoSuchWindowError(
                 `BrowsingContext does no longer exist`
               );
+            }
+
+            if (browsingContext.isContent) {
+              // The browsing context is (re-)resolved on every attempt and may
+              // have navigated to a privileged page since the command was
+              // initially dispatched. Without system access no command may run
+              // in a privileged context, so refuse to forward it there instead
+              // of executing with elevated privileges.
+              if (
+                !skipPrivilegeCheck &&
+                !lazy.RemoteAgent.allowSystemAccess &&
+                lazy.isPrivilegedContext(browsingContext)
+              ) {
+                throw new lazy.error.UnsupportedOperationError(
+                  `Cannot forward command "${methodName}" to a privileged browsing context`
+                );
+              }
             }
 
             try {

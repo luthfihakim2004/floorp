@@ -744,6 +744,7 @@ bool OpusState::Init(void) {
   opusData.mHeadersBinaryBlob->AppendElements(mHeaders.PeekFront()->packet,
                                               mHeaders.PeekFront()->bytes);
   mInfo.mCodecSpecificConfig = AudioCodecSpecificVariant{std::move(opusData)};
+  SetOpusOutputChannels(mInfo);
 
   mHeaders.Erase();
   LOG(LogLevel::Debug, ("Opus decoder init"));
@@ -909,7 +910,8 @@ bool OpusState::ReconstructOpusGranulepos(void) {
       mPrevPageGranulepos = last_gp;
       return true;
     }
-    NS_WARNING("No previous granule position to use for Opus end trimming.");
+    LOG(LogLevel::Debug,
+        ("No previous granule position to use for Opus end trimming."));
     // If we don't have a previous granule position, fall through.
     // We simply won't trim any samples from the end.
     // TODO: Are we guaranteed to have seen a previous page if there is one?

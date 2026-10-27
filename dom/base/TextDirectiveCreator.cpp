@@ -12,9 +12,9 @@
 #include "TextDirectiveUtil.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/ResultVariant.h"
+#include "mozilla/dom/Range.h"
 #include "nsFind.h"
 #include "nsINode.h"
-#include "nsRange.h"
 
 namespace mozilla::dom {
 
@@ -26,6 +26,7 @@ TextDirectiveCreator::TextDirectiveCreator(Document* aDocument,
       mFinder(WrapNotNull(new nsFind())),
       mWatchdog(aWatchdog) {
   mFinder->SetNodeIndexCache(&mNodeIndexCache);
+  mFinder->SetSkipNativeAnonymousContent(true);
 }
 
 TextDirectiveCreator::~TextDirectiveCreator() {

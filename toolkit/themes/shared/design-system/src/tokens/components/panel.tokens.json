@@ -8,14 +8,6 @@
           "nativeTheme": "Field",
           "forcedColors": "Menu"
         }
-      },
-      "dimmed": {
-        "@base": {
-          "value": "{background.color.dimmed.@base}"
-        },
-        "further": {
-          "value": "{background.color.dimmed.further}"
-        }
       }
     }
   },
@@ -41,6 +33,22 @@
       }
     }
   },
+  "footer": {
+    "background": {
+      "color": {
+        "value": {
+          "light": "color-mix(in srgb, currentColor 12%, transparent)",
+          "dark": "color-mix(in srgb, currentColor 17%, transparent)",
+          "nativeTheme": "color-mix(in srgb, currentColor 17%, transparent)"
+        }
+      }
+    },
+    "text": {
+      "color": {
+        "value": "inherit"
+      }
+    }
+  },
   "padding": {
     "@base": {
       "value": "16px"
@@ -51,6 +59,7 @@
   },
   "separator": {
     "color": {
+      "ignoreFigma": "color-mix with currentColor cannot be expressed in Figma",
       "value": {
         "default": "color-mix(in srgb, currentColor 25%, transparent)",
         "prefersContrast": "currentColor",
@@ -71,11 +80,13 @@
   },
   "text": {
     "color": {
-      "value": {
-        "light": "{color.black.@base}",
-        "dark": "rgb(251, 251, 254)",
-        "nativeTheme": "FieldText",
-        "forcedColors": "MenuText"
+      "@base": {
+        "value": {
+          "light": "{color.black.@base}",
+          "dark": "rgb(251, 251, 254)",
+          "nativeTheme": "FieldText",
+          "forcedColors": "MenuText"
+        }
       }
     }
   },

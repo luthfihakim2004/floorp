@@ -13,7 +13,7 @@
 
 import sys
 
-MINIMUM_MINOR_VERSION = 9
+MINIMUM_MINOR_VERSION = 10
 
 major, minor = sys.version_info[:2]
 if (major < 3) or (major == 3 and minor < MINIMUM_MINOR_VERSION):
@@ -215,6 +215,8 @@ def git_clone_firefox(git: Path, dest: Path, head_repo, head_rev):
     subprocess.check_call(
         [
             str(git),
+            "-c",
+            "checkout.workers=0",
             "checkout",
             "FETCH_HEAD" if head_rev else "main",
             "--",
@@ -309,6 +311,8 @@ def git_cinnabar_clone_firefox(git: Path, dest: Path, head_repo, head_rev):
         subprocess.check_call(
             [
                 str(git),
+                "-c",
+                "checkout.workers=0",
                 "checkout",
                 "FETCH_HEAD" if head_rev else "main",
                 "--",

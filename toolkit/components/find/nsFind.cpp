@@ -17,7 +17,6 @@
 #include "nsUnicharUtils.h"
 #include "nsUnicodeProperties.h"
 #include "nsCRT.h"
-#include "nsRange.h"
 #include "nsReadableUtils.h"
 #include "nsContentUtils.h"
 #include "mozilla/TextEditor.h"
@@ -27,6 +26,7 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLOptionElement.h"
 #include "mozilla/dom/HTMLSelectElement.h"
+#include "mozilla/dom/Range.h"
 #include "mozilla/dom/Text.h"
 #include "mozilla/intl/Segmenter.h"
 #include "mozilla/intl/UnicodeProperties.h"
@@ -191,7 +191,8 @@ static bool ShouldFindAnonymousContent(const nsIContent& aContent) {
   return true;
 }
 
-static bool SkipNode(const nsIContent* aContent) {
+static bool SkipNode(const nsIContent* aContent,
+                     bool aSkipNativeAnonymousContent) {
   const nsIContent* content = aContent;
   while (content) {
     if (!IsDisplayedNode(content) || content->IsComment() ||
@@ -220,7 +221,8 @@ static bool SkipNode(const nsIContent* aContent) {
     }
 
     if (content->IsInNativeAnonymousSubtree() &&
-        !ShouldFindAnonymousContent(*content)) {
+        (aSkipNativeAnonymousContent ||
+         !ShouldFindAnonymousContent(*content))) {
       DEBUG_FIND_PRINTF("Skipping node: ");
       DumpNode(content);
       return true;
@@ -260,8 +262,10 @@ static bool ForceBreakBetweenText(const Text& aPrevious, const Text& aNext) {
 }
 
 struct nsFind::State final {
-  State(bool aFindBackward, nsIContent& aRoot, const RangeBoundary& aStartPoint)
+  State(bool aFindBackward, bool aSkipNativeAnonymousContent, nsIContent& aRoot,
+        const RangeBoundary& aStartPoint)
       : mFindBackward(aFindBackward),
+        mSkipNativeAnonymousContent(aSkipNativeAnonymousContent),
         mInitialized(false),
         mFoundBreak(false),
         mIterOffset(-1),
@@ -302,12 +306,14 @@ struct nsFind::State final {
 
   // Returns whether the node should be used (true) or skipped over (false)
   static bool AnalyzeNode(const nsINode& aNode, const Text* aPrev,
-                          bool aAlreadyMatching, bool* aForcedBreak) {
+                          bool aAlreadyMatching,
+                          bool aSkipNativeAnonymousContent,
+                          bool* aForcedBreak) {
     if (!aNode.IsText()) {
       *aForcedBreak = *aForcedBreak || NonTextNodeForcesBreak(aNode);
       return false;
     }
-    if (SkipNode(aNode.AsText())) {
+    if (SkipNode(aNode.AsText(), aSkipNativeAnonymousContent)) {
       return false;
     }
     *aForcedBreak = *aForcedBreak ||
@@ -341,6 +347,7 @@ struct nsFind::State final {
   }
 
   const bool mFindBackward;
+  const bool mSkipNativeAnonymousContent;
 
   // Whether we've called GetNextNode() at least once.
   bool mInitialized;
@@ -372,7 +379,8 @@ void nsFind::State::Advance(Initializing aInitializing, bool aAlreadyMatching) {
     if (!current) {
       return;
     }
-    if (AnalyzeNode(*current, prev, aAlreadyMatching, &mFoundBreak)) {
+    if (AnalyzeNode(*current, prev, aAlreadyMatching,
+                    mSkipNativeAnonymousContent, &mFoundBreak)) {
       break;
     }
   }
@@ -406,7 +414,8 @@ void nsFind::State::Initialize() {
   }
 
   const bool kAlreadyMatching = false;
-  if (!AnalyzeNode(*current, nullptr, kAlreadyMatching, &mFoundBreak)) {
+  if (!AnalyzeNode(*current, nullptr, kAlreadyMatching,
+                   mSkipNativeAnonymousContent, &mFoundBreak)) {
     Advance(Initializing::Yes, kAlreadyMatching);
     current = mIterator.GetCurrent();
     if (!current) {
@@ -594,8 +603,9 @@ static bool IsSpace(char32_t aChar) {
 // Take nodes out of the tree with NextNode, until null (NextNode will return 0
 // at the end of our range).
 NS_IMETHODIMP
-nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
-             nsRange* aStartPoint, nsRange* aEndPoint, nsRange** aRangeRet) {
+nsFind::Find(const nsAString& aPatText, dom::Range* aSearchRange,
+             dom::Range* aStartPoint, dom::Range* aEndPoint,
+             dom::Range** aRangeRet) {
   DEBUG_FIND_PRINTF("============== nsFind::Find('%s'%s, %p, %p, %p)\n",
                     NS_LossyConvertUTF16toASCII(aPatText).get(),
                     mFindBackward ? " (backward)" : " (forward)",
@@ -614,7 +624,7 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
   }
   return NS_OK;
 }
-already_AddRefed<nsRange> nsFind::FindFromRangeBoundaries(
+already_AddRefed<dom::Range> nsFind::FindFromRangeBoundaries(
     const nsAString& aPatText, const mozilla::RangeBoundary& aStartPoint,
     const mozilla::RangeBoundary& aEndPoint) {
   if (!aStartPoint.IsSetAndInComposedDoc() ||
@@ -704,7 +714,8 @@ already_AddRefed<nsRange> nsFind::FindFromRangeBoundaries(
   char32_t patc = 0;
   char32_t prevCharInMatch = 0;
 
-  State state(mFindBackward, *root, mFindBackward ? aEndPoint : aStartPoint);
+  State state(mFindBackward, mSkipNativeAnonymousContent, *root,
+              mFindBackward ? aEndPoint : aStartPoint);
   Text* current = nullptr;
 
   auto EndPartialMatch = [&]() -> bool {
@@ -1002,7 +1013,7 @@ already_AddRefed<nsRange> nsFind::FindFromRangeBoundaries(
           matchEndOffset = findex + 1;
         }
 
-        RefPtr<nsRange> range = nsRange::Create(current);
+        RefPtr<dom::Range> range = dom::Range::Create(current);
         if (startParent && endParent && IsFindableNode(startParent) &&
             IsFindableNode(endParent)) {
           IgnoredErrorResult rv;

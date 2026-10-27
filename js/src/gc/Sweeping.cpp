@@ -721,14 +721,12 @@ IncrementalProgress GCRuntime::markGrayRoots(SliceBudget& budget,
       return NotFinished;
     }
 
-    Compartment::traceIncomingCrossCompartmentEdgesForZoneGC(
-        marker().tracer(), Compartment::GrayEdges);
+    traceIncomingCrossCompartmentEdgesForZoneGC(marker().tracer(), GrayEdges);
   }
 
   // Also mark any incoming cross compartment edges that were originally gray
   // but have been marked black by a barrier.
-  Compartment::traceIncomingCrossCompartmentEdgesForZoneGC(
-      marker().tracer(), Compartment::BlackEdges);
+  traceIncomingCrossCompartmentEdgesForZoneGC(marker().tracer(), BlackEdges);
 
   return Finished;
 }
@@ -1375,6 +1373,7 @@ void GCRuntime::updateAtomsBitmap() {
 
 void GCRuntime::sweepCCWrappers() {
   SweepingTracer trc(rt);
+  trc.setAllowSweepingSymbolsEarly(true);
   for (SweepGroupZonesIter zone(this); !zone.done(); zone.next()) {
     zone->traceWeakCCWEdges(&trc);
   }
@@ -1819,22 +1818,19 @@ IncrementalProgress GCRuntime::beginSweepingSweepGroup(JS::GCContext* gcx,
   // Now that the final mark state has been computed check any gray marking
   // assertions we delayed until this point.
 
-  if (areGrayBitsValid()) {
-    for (SweepGroupZonesIter zone(this); !zone.done(); zone.next()) {
+  for (SweepGroupZonesIter zone(this); !zone.done(); zone.next()) {
+    if (areGrayBitsValid()) {
       for (const auto* cell : zone->cellsToAssertNotGray()) {
         if (cell->isMarkedGray()) {
           const char* kind = JS::GCTraceKindToAscii(cell->getTraceKind());
           printf_stderr("AssertCellIsNotGray: Found gray %s %p\n", kind, cell);
           foundUnexpectedGrayCells = true;
+          // Finish the GC non-incrementally. We will assert at the end of GC.
+          budget = SliceBudget::unlimited();
         }
       }
-      zone->cellsToAssertNotGray().clearAndFree();
     }
-
-    if (foundUnexpectedGrayCells) {
-      // Finish the GC non-incrementally. We will assert at the end of GC.
-      budget = SliceBudget::unlimited();
-    }
+    zone->cellsToAssertNotGray().clearAndFree();
   }
 #endif
 
