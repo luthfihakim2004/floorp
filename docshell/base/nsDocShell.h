@@ -291,6 +291,7 @@ class nsDocShell final : public nsDocLoader,
   // ForceRefreshURI method on nsIRefreshURI, but makes sure to take
   // the timer involved out of mRefreshURIList if it's there.
   // aTimer must not be null.
+  MOZ_CAN_RUN_SCRIPT
   nsresult ForceRefreshURIFromTimer(nsIURI* aURI, nsIPrincipal* aPrincipal,
                                     uint32_t aDelay, nsITimer* aTimer);
 
@@ -605,7 +606,7 @@ class nsDocShell final : public nsDocLoader,
 
   void UpdateActiveEntry(
       bool aReplace, const mozilla::Maybe<nsPoint>& aPreviousScrollPos,
-      nsIURI* aURI, nsIURI* aOriginalURI, nsIReferrerInfo* aReferrerInfo,
+      nsIURI* aURI, nsIReferrerInfo* aReferrerInfo,
       nsIPrincipal* aTriggeringPrincipal, nsIPolicyContainer* aPolicyContainer,
       const nsAString& aTitle, bool aScrollRestorationIsManual,
       nsIStructuredCloneContainer* aData, bool aURIWasModified);
@@ -978,11 +979,12 @@ class nsDocShell final : public nsDocLoader,
       nsDocShellLoadState* aLoadState,
       mozilla::Maybe<mozilla::dom::UserNavigationInvolvement> aUserInvolvement);
 
+  MOZ_CAN_RUN_SCRIPT
   nsresult LoadHistoryEntry(
       const mozilla::dom::LoadingSessionHistoryInfo& aEntry, uint32_t aLoadType,
       bool aUserActivation, bool aNotifiedBeforeUnloadListeners,
       bool aIsResumingInterceptedNavigation);
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  MOZ_CAN_RUN_SCRIPT
   nsresult LoadHistoryEntry(nsDocShellLoadState* aLoadState, uint32_t aLoadType,
                             bool aLoadingCurrentEntry);
   nsresult GetHttpChannel(nsIChannel* aChannel, nsIHttpChannel** aReturn);
@@ -1011,6 +1013,7 @@ class nsDocShell final : public nsDocLoader,
 
   // If we are passed a named target during InternalLoad, this method handles
   // moving the load to the browsing context the target name resolves to.
+  MOZ_CAN_RUN_SCRIPT
   nsresult PerformRetargeting(nsDocShellLoadState* aLoadState);
 
   // Returns one of nsIContentPolicy::TYPE_DOCUMENT,
@@ -1063,6 +1066,7 @@ class nsDocShell final : public nsDocLoader,
   // NS_ERROR_DOM_BAD_CROSS_ORIGIN_URI if it does not.
   nsresult CheckDisallowedJavascriptLoad(nsDocShellLoadState* aLoadState);
 
+  MOZ_CAN_RUN_SCRIPT
   nsresult LoadURI(nsDocShellLoadState* aLoadState, bool aSetNavigating,
                    bool aContinueHandlingSubframeHistory);
 
@@ -1096,7 +1100,16 @@ class nsDocShell final : public nsDocLoader,
   void MaybeDisconnectChildListenersOnPageHide();
 
   /**
-   * Helper for addState and document.open that does just the
+   * Do either a history.pushState() or history.replaceState() operation,
+   * depending on the value of aReplace.
+   */
+  MOZ_CAN_RUN_SCRIPT
+  nsresult AddState(JS::Handle<JS::Value> aData, const nsAString& aTitle,
+                    const nsAString& aURL, mozilla::dom::CallerType aCallerType,
+                    bool aReplace, JSContext* aCx);
+
+  /**
+   * Helper for AddState and document.open that does just the
    * history-manipulation guts.
    *
    * Arguments the spec defines:

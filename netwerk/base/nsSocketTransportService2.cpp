@@ -728,17 +728,7 @@ int32_t nsSocketTransportService::Poll(PRIntervalTime ts) {
   int32_t n;
   {
     TimeStamp startTime = TimeStamp::Now();
-    if (pollTimeout != PR_INTERVAL_NO_WAIT) {
-      // There will be an actual non-zero wait, let the profiler know about it
-      // by marking thread as sleeping around the polling call.
-      profiler_thread_sleep();
-    }
-
     n = PR_Poll(firstPollEntry, pollCount, pollTimeout);
-
-    if (pollTimeout != PR_INTERVAL_NO_WAIT) {
-      profiler_thread_wake();
-    }
     if (profiler_thread_is_being_profiled_for_markers()) {
       PROFILER_MARKER_TEXT(
           "SocketTransportService::Poll", NETWORK,
@@ -1204,6 +1194,25 @@ nsSocketTransportService::Run() {
   TimeStamp startOfIteration;
   TimeStamp startOfNextIteration;
 
+  TimeStamp shutdownStarted;
+  auto keepProcessingEvents = [&]() {
+    if (!mShuttingDown) {
+      return true;
+    }
+    if (shutdownStarted.IsNull()) {
+      shutdownStarted = TimeStamp::NowLoRes();
+    }
+
+    uint32_t shutdownGracePeriod =
+        StaticPrefs::network_socket_shutdown_process_events_ms();
+    if (!shutdownGracePeriod) {
+      return true;
+    }
+
+    return (TimeStamp::NowLoRes() - shutdownStarted).ToMilliseconds() <
+           (double)shutdownGracePeriod;
+  };
+
   for (;;) {
     bool pendingEvents = false;
     if (Telemetry::CanRecordPrereleaseData()) {
@@ -1239,7 +1248,7 @@ nsSocketTransportService::Run() {
       }
 
       mRawThread->HasPendingEvents(&pendingEvents);
-      if (!hadPriorityEvent && pendingEvents) {
+      if ((!hadPriorityEvent || mShuttingDown) && pendingEvents) {
         if (!mServingPendingQueue) {
           nsresult rv = Dispatch(
               NewRunnableMethod(
@@ -1276,7 +1285,7 @@ nsSocketTransportService::Run() {
       }
       AutoReadLock lock(mQueueLock);
       pendingEvents = pendingEvents || !mPriorityEventQueue.IsEmpty();
-    } while (pendingEvents);
+    } while (pendingEvents && keepProcessingEvents());
 
     bool goingOffline = false;
     // now that our event queue is empty, check to see if we should exit
@@ -1507,26 +1516,8 @@ nsresult nsSocketTransportService::DoPollIteration() {
   if (profiling) {
     TimeStamp endTime = TimeStamp::Now();
     if ((endTime - startTime).ToMilliseconds() >= SOCKET_THREAD_LONGTASK_MS) {
-      struct LongTaskMarker {
-        static constexpr Span<const char> MarkerTypeName() {
-          return MakeStringSpan("SocketThreadLongTask");
-        }
-        static void StreamJSONMarkerData(
-            baseprofiler::SpliceableJSONWriter& aWriter) {
-          aWriter.StringProperty("category", "LongTask");
-        }
-        static MarkerSchema MarkerTypeDisplay() {
-          using MS = MarkerSchema;
-          MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable};
-          schema.AddKeyLabelFormat("category", "Type", MS::Format::String);
-          return schema;
-        }
-      };
-
-      profiler_add_marker(ProfilerString8View("LongTaskSocketProcessing"),
-                          geckoprofiler::category::OTHER,
-                          MarkerTiming::Interval(startTime, endTime),
-                          LongTaskMarker{});
+      PROFILER_MARKER_UNTYPED("LongTaskSocketProcessing", OTHER,
+                              MarkerTiming::Interval(startTime, endTime));
     }
   }
 

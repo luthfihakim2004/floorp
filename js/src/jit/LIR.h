@@ -178,8 +178,6 @@ class LAllocation {
 
   bool operator==(const LAllocation& other) const = default;
 
-  bool operator!=(const LAllocation& other) const = default;
-
   HashNumber hash() const { return bits_; }
 
   uintptr_t asRawBits() const { return bits_; }
@@ -196,7 +194,7 @@ class LUse : public LAllocation {
   static const uint32_t POLICY_BITS = 3;
   static const uint32_t POLICY_SHIFT = 0;
   static const uint32_t POLICY_MASK = (1 << POLICY_BITS) - 1;
-#ifdef JS_CODEGEN_ARM64
+#if defined(JS_CODEGEN_ARM64) || defined(JS_CODEGEN_LOONG64)
   static const uint32_t REG_BITS = 7;
 #else
   static const uint32_t REG_BITS = 6;
@@ -586,7 +584,7 @@ class LDefinition {
     static_assert(MAX_VIRTUAL_REGISTERS <= VREG_MASK);
     bits_ =
         (index << VREG_SHIFT) | (policy << POLICY_SHIFT) | (type << TYPE_SHIFT);
-#ifndef ENABLE_WASM_SIMD
+#ifndef ENABLE_JIT_SIMD
     MOZ_ASSERT(this->type() != SIMD128);
 #endif
   }

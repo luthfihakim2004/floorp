@@ -226,8 +226,10 @@ class ObjectFuse {
   void handlePropertyValueChange(JSContext* cx, PropertyInfo prop);
   void handlePropertyRemove(JSContext* cx, PropertyInfo prop,
                             bool* wasTrackedProp);
+  void finishPropertyRemove(PropertyInfo prop);
   void handleTeleportingShadowedProperty(JSContext* cx, PropertyInfo prop);
   void handleTeleportingProtoMutation(JSContext* cx);
+  void handleGlobalLexicalMutation(JSContext* cx);
   void handleShadowedGlobalProperty(JSContext* cx, PropertyInfo prop);
 
   bool addDependency(uint32_t propSlot, const jit::IonScriptKey& ionScript);

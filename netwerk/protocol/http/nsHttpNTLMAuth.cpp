@@ -33,6 +33,7 @@
 #include "nsCRT.h"
 #include "nsIChannel.h"
 #include "nsNetUtil.h"
+#include "nsQueryObject.h"
 #include "nsUnicharUtils.h"
 
 namespace mozilla {
@@ -130,6 +131,29 @@ class nsNTLMSessionState final : public nsISupports {
 };
 NS_IMPL_ISUPPORTS0(nsNTLMSessionState)
 
+#define NS_NTLMCONTINUATIONSTATE_IID \
+  {0xb2db7a3e, 0x7608, 0x4e9b, {0xba, 0x0b, 0xd0, 0x1a, 0x2f, 0x4f, 0x97, 0x22}}
+
+// Per-channel continuation state. The authenticator is a process-wide
+// singleton, so anything decided in ChallengeReceived for one channel must be
+// kept here rather than on nsHttpNTLMAuth.
+class nsNTLMContinuationState final : public nsISupports {
+  ~nsNTLMContinuationState() = default;
+
+ public:
+  NS_INLINE_DECL_STATIC_IID(NS_NTLMCONTINUATIONSTATE_IID)
+  NS_DECL_ISUPPORTS
+
+  nsNTLMContinuationState(already_AddRefed<nsIAuthModule> aModule,
+                          bool aUseNative)
+      : mModule(aModule), mUseNative(aUseNative) {}
+
+  const nsCOMPtr<nsIAuthModule> mModule;
+  // Whether mModule is the native NTLM implementation or the internal one.
+  const bool mUseNative;
+};
+NS_IMPL_ISUPPORTS(nsNTLMContinuationState, nsNTLMContinuationState)
+
 //-----------------------------------------------------------------------------
 
 already_AddRefed<nsIHttpAuthenticator> nsHttpNTLMAuth::GetOrCreate() {
@@ -156,9 +180,6 @@ nsHttpNTLMAuth::ChallengeReceived(nsIHttpAuthenticableChannel* channel,
   LOG(("nsHttpNTLMAuth::ChallengeReceived [ss=%p cs=%p]\n", *sessionState,
        *continuationState));
 
-  // Use the native NTLM if available
-  mUseNative = true;
-
   // NOTE: we don't define any session state, but we do use the pointer.
 
   *identityInvalid = false;
@@ -168,6 +189,9 @@ nsHttpNTLMAuth::ChallengeReceived(nsIHttpAuthenticableChannel* channel,
   // try to use them.
   if (challenge.Equals("NTLM"_ns, nsCaseInsensitiveCStringComparator)) {
     nsCOMPtr<nsIAuthModule> module;
+
+    // Use the native NTLM if available
+    bool useNative = true;
 
 #ifdef MOZ_AUTH_EXTENSION
     // Check to see if we should default to our generic NTLM auth module
@@ -222,7 +246,7 @@ nsHttpNTLMAuth::ChallengeReceived(nsIHttpAuthenticableChannel* channel,
       LOG(("Trying to fall back on internal ntlm auth.\n"));
       module = nsIAuthModule::CreateInstance("ntlm");
 
-      mUseNative = false;
+      useNative = false;
 
       // Prompt user for domain, username, and password.
       *identityInvalid = true;
@@ -237,7 +261,9 @@ nsHttpNTLMAuth::ChallengeReceived(nsIHttpAuthenticableChannel* channel,
 
     // A non-null continuation state implies that we failed to authenticate.
     // Blow away the old authentication state, and use the new one.
-    module.forget(continuationState);
+    RefPtr<nsNTLMContinuationState> state =
+        new nsNTLMContinuationState(module.forget(), useNative);
+    state.forget(continuationState);
   }
   return NS_OK;
 }
@@ -272,8 +298,12 @@ nsHttpNTLMAuth::GenerateCredentials(
   if (user.IsEmpty() || pass.IsEmpty()) *aFlags = USING_INTERNAL_IDENTITY;
 
   nsresult rv;
-  nsCOMPtr<nsIAuthModule> module = do_QueryInterface(*continuationState, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
+  RefPtr<nsNTLMContinuationState> state = do_QueryObject(*continuationState);
+  if (!state || !state->mModule) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  nsCOMPtr<nsIAuthModule> module = state->mModule;
+  const bool useNative = state->mUseNative;
 
   void *inBuf, *outBuf;
   uint32_t inBufLen, outBufLen;
@@ -281,6 +311,14 @@ nsHttpNTLMAuth::GenerateCredentials(
 
   // initial challenge
   if (aChallenge.Equals("NTLM"_ns, nsCaseInsensitiveCStringComparator)) {
+    // An empty user or password makes nsAuthSSPI::Init authenticate as the
+    // logged-in user, which only CanUseDefaultCredentials() hosts may do.
+    if (useNative && (user.IsEmpty() || pass.IsEmpty()) &&
+        !CanUseDefaultCredentials(authChannel, isProxyAuth)) {
+      LOG(("Not using default credentials for an untrusted host\n"));
+      return NS_ERROR_ABORT;
+    }
+
     // NTLM service name format is 'HTTP@host' for both http and https
     nsCOMPtr<nsIURI> uri;
     rv = authChannel->GetURI(getter_AddRefs(uri));
@@ -322,7 +360,7 @@ nsHttpNTLMAuth::GenerateCredentials(
     rv = channel->GetSecurityInfo(getter_AddRefs(securityInfo));
     if (NS_FAILED(rv)) return rv;
 
-    if (mUseNative && securityInfo) {
+    if (useNative && securityInfo) {
       nsCOMPtr<nsIX509Cert> cert;
       rv = securityInfo->GetServerCert(getter_AddRefs(cert));
       if (NS_FAILED(rv)) return rv;

@@ -105,8 +105,6 @@ void AdapterInfo::GetWgpuDeviceType(nsString& s) const {
     case ffi::WGPUDeviceType_Other:
       s.AssignLiteral("Other");
       return;
-    case ffi::WGPUDeviceType_Sentinel:
-      break;
   }
   MOZ_CRASH("Bad `ffi::WGPUDeviceType`");
 }
@@ -136,10 +134,9 @@ void AdapterInfo::GetWgpuBackend(nsString& s) const {
     case ffi::WGPUBackend_Gl:
       s.AssignLiteral("Gl");
       return;
-    case ffi::WGPUBackend_BrowserWebGpu:  // This should never happen, because
-                                          // we _are_ the browser.
-    case ffi::WGPUBackend_Sentinel:
-      break;
+    case ffi::WGPUBackend_BrowserWebGpu:
+      break;  // This should never happen, because
+              // we _are_ the browser.
   }
   MOZ_CRASH("Bad `ffi::WGPUBackend`");
 }
@@ -226,12 +223,10 @@ struct FeatureImplementationStatus {
         return implemented(WGPUWEBGPU_FEATURE_FLOAT32_FILTERABLE);
 
       case dom::GPUFeatureName::Float32_blendable:
-        return unimplemented(
-            "https://bugzilla.mozilla.org/show_bug.cgi?id=1931630");
+        return implemented(WGPUWEBGPU_FEATURE_FLOAT32_BLENDABLE);
 
       case dom::GPUFeatureName::Clip_distances:
-        return unimplemented(
-            "https://bugzilla.mozilla.org/show_bug.cgi?id=1931629");
+        return implemented(WGPUWEBGPU_FEATURE_CLIP_DISTANCES);
 
       case dom::GPUFeatureName::Dual_source_blending:
         return implemented(WGPUWEBGPU_FEATURE_DUAL_SOURCE_BLENDING);
@@ -606,6 +601,10 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
     // > devices created from such adapters.
     features->Add(dom::GPUFeatureName::Core_features_and_limits, aRv);
 
+    // Only a fallback for `WebGPUChild::ClearActorState`, which has no
+    // response to read the created device's limits from. Otherwise
+    // `wgpu_child_resolve_request_device_promise` builds them from the
+    // response, since wgpu-core may adjust what we ask for here.
     RefPtr<SupportedLimits> limits = new SupportedLimits(this, deviceLimits);
 
     ffi::WGPUFfiDeviceDescriptor ffiDesc = {};

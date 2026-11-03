@@ -9,6 +9,7 @@
 #include "mozilla/MozPromise.h"
 #include "mozilla/Variant.h"
 #include "mozilla/WeakPtr.h"
+#include "mozilla/dom/RemoteType.h"
 #include "mozilla/dom/SessionHistoryEntry.h"
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/net/NeckoCommon.h"
@@ -438,7 +439,7 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // created a fixed URI to attempt loading instead.
   // If successful, this calls DisconnectListeners to completely finish
   // the current load, and calls BrowsingContext::LoadURI to start the new one.
-  bool MaybeHandleLoadErrorWithURIFixup(nsresult aStatus);
+  MOZ_CAN_RUN_SCRIPT bool MaybeHandleLoadErrorWithURIFixup(nsresult aStatus);
 
   // This defines a variant that describes all the attribute setters (and their
   // parameters) from nsIParentChannel
@@ -608,7 +609,7 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // channel to the final document.
   RefPtr<dom::ParentProcessChannelHandle> mParentProcessChannelHandle;
 
-  Maybe<nsCString> mRemoteTypeOverride;
+  Maybe<dom::RemoteType> mRemoteTypeOverride;
 
   // The ContentParent which this channel is currently connected to, or nullptr
   // if connected to the parent process.

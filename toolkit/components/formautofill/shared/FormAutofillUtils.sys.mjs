@@ -190,6 +190,51 @@ FormAutofillUtils = {
     return this._unsupportedFieldNameInfo.includes(fieldName);
   },
 
+  /**
+   * Determine whether the element carries an autocomplete attribute that the
+   * parser could not resolve to a known field name, which we treat as a signal
+   * that the site does not want browser autofill on this field (Bug 1999789).
+   *
+   * getAutocompleteInfo() returns an empty fieldName for both "no attribute" and
+   * "attribute present but unparseable", so the presence of the attribute is
+   * what separates the two.
+   *
+   * Called at field detection time (FormAutofillHeuristics.inferFieldInfo),
+   * which leaves such a field unclassified so that it takes no part in
+   * autofill at all.
+   *
+   * @param {HTMLElement} element
+   * @param {?AutocompleteInfo} autocompleteInfo
+   *        The result of element.getAutocompleteInfo(), which is null when
+   *        autocomplete does not apply to this element type.
+   * @returns {boolean}
+   */
+  hasUnrecognizedAutocomplete(element, autocompleteInfo) {
+    if (autocompleteInfo?.fieldName) {
+      return false;
+    }
+
+    const tokens =
+      element
+        .getAttribute("autocomplete")
+        ?.trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean) ?? [];
+
+    // An absent, empty or whitespace-only attribute expresses no intent, so it
+    // is treated the same as having no attribute at all.
+    if (!tokens.length) {
+      return false;
+    }
+
+    // "off" and "on" parse as valid field names on their own and never reach
+    // here. In a malformed multi-token value they do, and honouring those as a
+    // suppression signal would read as respecting autocomplete=off through a
+    // side door (Bug 1754879).
+    return !tokens.includes("off") && !tokens.includes("on");
+  },
+
   isCCNumber(ccNumber) {
     return ccNumber && lazy.CreditCard.isValidNumber(ccNumber);
   },
@@ -1600,6 +1645,21 @@ XPCOMUtils.defineLazyPreferenceGetter(
   2 * 60 * 1000
 );
 
+// Field types the ML model is not trusted with, parsed from the comma
+// separated pref. They are classified by the regexp-based heuristics instead.
+XPCOMUtils.defineLazyPreferenceGetter(
+  FormAutofillUtils,
+  "mlIgnoreFieldTypes",
+  "extensions.formautofill.useml.ignoreFieldTypes",
+  "",
+  null,
+  pref =>
+    pref
+      .split(",")
+      .map(fieldType => fieldType.trim())
+      .filter(fieldType => !!fieldType)
+);
+
 XPCOMUtils.defineLazyPreferenceGetter(
   FormAutofillUtils,
   "isMLUsedAlready",
@@ -1612,4 +1672,31 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "isNativeOnnxRuntimeAvailable",
   AUTOFILL_ML_NATIVE_ONNX_PREF,
   false
+);
+
+// Optional mlData tokenizer features, as a JSON array of feature keys (e.g.
+// ["select_option", "input_attributes"]).
+XPCOMUtils.defineLazyPreferenceGetter(
+  FormAutofill,
+  "mlFeatures",
+  "extensions.formautofill.useml.features",
+  "[]",
+  null,
+  value => {
+    try {
+      const list = JSON.parse(value);
+      return new Set(Array.isArray(list) ? list : []);
+    } catch {
+      return new Set();
+    }
+  }
+);
+
+// Pin the ML model revision to load (the encoder and head engines share one
+// version).
+XPCOMUtils.defineLazyPreferenceGetter(
+  FormAutofill,
+  "mlModelVersion",
+  "extensions.formautofill.useml.modelVersion",
+  ""
 );

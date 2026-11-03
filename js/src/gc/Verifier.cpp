@@ -47,12 +47,12 @@ using namespace js::gc;
  * |always| parameter is true, it starts a new phase no matter what.
  *
  * Pre-Barrier Verifier:
- *   When StartVerifyBarriers is called, a snapshot is taken of all objects in
- *   the GC heap and saved in an explicit graph data structure. Later,
- *   EndVerifyBarriers traverses the heap again. Any pointer values that were in
- *   the snapshot and are no longer found must be marked; otherwise an assertion
- *   triggers. Note that we must not GC in between starting and finishing a
- *   verification phase.
+ *   When GCRuntime::startVerifyPreBarriers is called, a snapshot is taken of
+ *   all objects in the GC heap and saved in an explicit graph data
+ *   structure. Later, EndVerifyBarriers traverses the heap again. Any pointer
+ *   values that were in the snapshot and are no longer found must be marked;
+ *   otherwise an assertion triggers. Note that we must not GC in between
+ *   starting and finishing a verification phase.
  */
 
 struct EdgeValue {
@@ -210,7 +210,7 @@ void gc::GCRuntime::startVerifyPreBarriers() {
 
   number++;
 
-  VerifyPreTracer* trc = js_new<VerifyPreTracer>(rt);
+  UniquePtr<VerifyPreTracer> trc = MakeUnique<VerifyPreTracer>(rt);
   if (!trc) {
     return;
   }
@@ -225,6 +225,16 @@ void gc::GCRuntime::startVerifyPreBarriers() {
 
   ClearMarkBits<AllZonesIter>(this);
 
+  // We've cleared all marking state so set the gray marking state to
+  // invalid. This will persist until the next full GC completes.
+  //
+  // Note that pre-barrier verification does not correctly rebuild marking state
+  // even if it completes successfully, since barriers fired during verification
+  // push things onto the mark stack which are never traced. This can leave
+  // things marked black without their children having been marked to match, so
+  // may leave black to gray edges.
+  setGrayBitsInvalid();
+
   gcstats::AutoPhase ap(stats(), gcstats::PhaseKind::TRACE_HEAP);
 
   const size_t size = 64 * 1024 * 1024;
@@ -236,13 +246,13 @@ void gc::GCRuntime::startVerifyPreBarriers() {
   trc->term = trc->edgeptr + size;
 
   /* Create the root node. */
-  trc->curnode = MakeNode(trc, JS::GCCellPtr());
+  trc->curnode = MakeNode(trc.get(), JS::GCCellPtr());
 
   MOZ_ASSERT(incrementalState == State::NotActive);
   incrementalState = State::MarkRoots;
 
   /* Make all the roots be edges emanating from the root node. */
-  traceRuntime(trc, prep);
+  traceRuntime(trc.get(), prep);
 
   VerifyNode* node;
   node = trc->curnode;
@@ -254,10 +264,10 @@ void gc::GCRuntime::startVerifyPreBarriers() {
   while ((char*)node < trc->edgeptr) {
     for (uint32_t i = 0; i < node->count; i++) {
       EdgeValue& e = node->edges[i];
-      VerifyNode* child = MakeNode(trc, e.thing);
+      VerifyNode* child = MakeNode(trc.get(), e.thing);
       if (child) {
         trc->curnode = child;
-        JS::TraceChildren(trc, e.thing);
+        JS::TraceChildren(trc.get(), e.thing);
       }
       if (trc->edgeptr == trc->term) {
         goto oom;
@@ -267,7 +277,7 @@ void gc::GCRuntime::startVerifyPreBarriers() {
     node = NextNode(node);
   }
 
-  verifyPreData = trc;
+  verifyPreData = trc.release();
   incrementalState = State::Mark;
   haveAllImplicitEdges_ = true;
   marker().start();
@@ -281,9 +291,8 @@ void gc::GCRuntime::startVerifyPreBarriers() {
   return;
 
 oom:
+  MOZ_ASSERT(!verifyPreData);
   incrementalState = State::NotActive;
-  js_delete(trc);
-  verifyPreData = nullptr;
 }
 
 static bool IsMarkedOrAllocated(TenuredCell* cell) {
@@ -416,11 +425,6 @@ void gc::GCRuntime::endVerifyPreBarriers() {
   marker().reset();
   resetDelayedMarking();
   resetDeferredWeakMaps();
-
-  // Barriers fired during verification also push things onto the mark stack
-  // which are never traced. This can leave things marked black without their
-  // children having been marked to match, so may leave black to gray edges.
-  setGrayBitsInvalid();
 
   for (AllZonesIter zone(this); !zone.done(); zone.next()) {
     zone->bufferAllocator.clearMarkStateAfterBarrierVerification();
@@ -1150,13 +1154,18 @@ JS_PUBLIC_API bool js::CheckGrayMarkingState(JSRuntime* rt) {
   return tracer.check(session);
 }
 
-static JSObject* MaybeGetDelegate(Cell* cell) {
-  if (!cell->is<JSObject>()) {
-    return nullptr;
+static Cell* MaybeGetDelegate(Cell* cell) {
+  if (cell->is<JSObject>()) {
+    JSObject* object = cell->as<JSObject>();
+    return UncheckedUnwrapWithoutExpose(object);
   }
 
-  JSObject* object = cell->as<JSObject>();
-  return js::UncheckedUnwrapWithoutExpose(object);
+  if (cell->is<JS::Symbol>()) {
+    JS::Symbol* symbol = cell->as<JS::Symbol>();
+    return UnwrapSymbol(symbol);
+  }
+
+  return nullptr;
 }
 bool js::gc::CheckWeakMapMapMarking(const WeakMapBase* map) {
   bool ok = true;
@@ -1240,7 +1249,7 @@ bool js::gc::CheckWeakMapEntryMarking(const WeakMapBase* map, Cell* key,
     ok = false;
   }
 
-  JSObject* delegate = MaybeGetDelegate(key);
+  Cell* delegate = MaybeGetDelegate(key);
   if (delegate) {
     CellColor delegateColor = effectiveColor(delegate);
     if (keyColor < std::min(map->mapColor(), delegateColor)) {
@@ -1252,9 +1261,10 @@ bool js::gc::CheckWeakMapEntryMarking(const WeakMapBase* map, Cell* key,
     }
   }
 
-  // References to symbol keys and values must be recorded in the atom reference
-  // bitmap for the zone. It's hard to make any claims about the what the
-  // reference color should be relative to the mark color of the symbol though:
+  // Only local symbol keys are permitted. Shared symbol values must be recorded
+  // in the atom reference bitmap for the zone. It's hard to make any claims
+  // about what the reference color should be relative to the mark color of the
+  // symbol though:
   //
   //  - The atom reference bitmap is an over-approximation that can be refined
   //    down at the end of GC, so it's possible for a symbol to be less marked
@@ -1267,25 +1277,30 @@ bool js::gc::CheckWeakMapEntryMarking(const WeakMapBase* map, Cell* key,
   GCRuntime* gc = &mapRuntime->gc;
   if (key->is<JS::Symbol>()) {
     auto* symbol = key->as<JS::Symbol>();
-    CellColor keyRefColor = gc->atomReferences.getRefColor(mapZone, symbol);
-    if (keyRefColor == CellColor::White) {
-      printf_stderr(
-          "Symbol key %p in map %p is not present in the atom reference "
-          "bitmap for zone %p\n",
-          key, map, mapZone);
-      ok = false;
+    MOZ_ASSERT(symbol->code() != JS::SymbolCode::InSymbolRegistry);
+    MOZ_ASSERT(symbol->isUnique() == symbol->isLocal());
+    if (!symbol->isUnique()) {
+      if (!gc->atomReferences.hasRef(mapZone, symbol)) {
+        printf_stderr(
+            "Non-unique symbol key %p in map %p is not present in the atom "
+            "reference bitmap for zone %p\n",
+            key, map, mapZone);
+        ok = false;
+      }
     }
   }
 
   if (maybeValue && maybeValue->is<JS::Symbol>()) {
     auto* symbol = maybeValue->as<JS::Symbol>();
-    CellColor valueRefColor = gc->atomReferences.getRefColor(mapZone, symbol);
-    if (valueRefColor == CellColor::White) {
-      printf_stderr(
-          "Symbol value %p in map %p is not present in the atom reference "
-          "bitmap for zone %p\n",
-          maybeValue, map, mapZone);
-      ok = false;
+    MOZ_ASSERT(symbol->isUnique() == symbol->isLocal());
+    if (symbol->isShared()) {
+      if (!gc->atomReferences.hasRef(mapZone, symbol)) {
+        printf_stderr(
+            "Shared symbol value %p in map %p is not present in the atom "
+            "reference bitmap for zone %p\n",
+            maybeValue, map, mapZone);
+        ok = false;
+      }
     }
   }
 

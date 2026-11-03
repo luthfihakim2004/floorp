@@ -271,6 +271,7 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
 
   void SetPresContext(nsPresContext* aPresContext);
   void ClearFrameRefs(nsIFrame* aFrame);
+  void MaybeLeavePendingLink(bool aWasCanceled);
 
   nsIFrame* GetEventTarget();
   nsIContent* GetExplicitEventTargetContent(const WidgetEvent* = nullptr);
@@ -1336,6 +1337,11 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
   void RemoveNodeFromChainIfNeeded(ElementState aState,
                                    nsIContent* aContentRemoved, bool aNotify);
 
+  // Tells the hovered document's speculation rules that the deepest hovered
+  // node is about to become aNewHover, so that it can start or cancel the
+  // hover delay for a moderate eagerness prefetch.
+  void NotifySpeculationRulesOfHover(nsIContent* aNewHover);
+
   [[nodiscard]] bool IsEventOutsideDragThreshold(
       const WidgetInputEvent& aEvent) const;
 
@@ -1423,6 +1429,12 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
   // to restore mouse position after unlocking.
   static LayoutDeviceIntPoint sPreLockScreenPoint;
 
+  // Screen point of the last event that wasn't synthesized for tests, if any.
+  // Only this is used to restore the pointer after unlocking, so that
+  // synthesized events don't move the real cursor somewhere it never was.
+  static Maybe<CSSIntPoint> sLastRealScreenPoint;
+  static bool sRestorePointerAfterUnlock;
+
   // Stores the mRefPoint of the last synthetic mouse move we dispatched
   // to re-center the mouse when we were pointer locked. If this is (-1,-1) it
   // means we've not recently dispatched a centering event. We use this to
@@ -1471,6 +1483,7 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
   // The primary frame of the link currently shown in the status bar.
   // Checked in ClearFrameRefs to avoid stalling link status bar.
   WeakFrame mLinkOverFrame;
+  RefPtr<dom::Element> mPendingLeaveLinkElement;
 
   nsPresContext* mPresContext;      // Not refcnted
   RefPtr<dom::Document> mDocument;  // Doesn't necessarily need to be owner

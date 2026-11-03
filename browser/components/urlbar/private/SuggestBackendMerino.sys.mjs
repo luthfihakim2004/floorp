@@ -20,7 +20,18 @@ ChromeUtils.defineESModuleGetters(lazy, {
  */
 export class SuggestBackendMerino extends SuggestBackend {
   get enablingPreferences() {
-    return ["quickSuggestOnlineAvailable", "quicksuggest.online.enabled"];
+    return [
+      "quickSuggestOnlineAvailable",
+
+      // This pref corresponds to the online checkbox in the Suggest settings
+      // UI.
+      "quicksuggest.online.enabled",
+
+      // This pref corresponds to the "Suggestions from Firefox" checkbox in the
+      // Suggest settings UI. The online checkbox is nested underneath that
+      // checkbox, so gate the backend on its pref.
+      "suggest.quicksuggest.all",
+    ];
   }
 
   /**
@@ -67,6 +78,11 @@ export class SuggestBackendMerino extends SuggestBackend {
     // fetches to finish so we can record their latency.
   }
 
+  /**
+   * @param {UrlbarQueryContext} _queryContext
+   * @param {UrlbarParentController} _controller
+   * @param {object} _details
+   */
   onSearchSessionEnd(_queryContext, _controller, _details) {
     // Reset the Merino session ID when a session ends. By design for the user's
     // privacy, we don't keep it around between engagements.

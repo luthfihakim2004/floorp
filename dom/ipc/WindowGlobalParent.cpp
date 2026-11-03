@@ -144,6 +144,17 @@ WindowGlobalParent::WindowGlobalParent(
   MOZ_DIAGNOSTIC_ASSERT(XRE_IsParentProcess(), "Parent process only");
 }
 
+// An error page's own load has no session history load, so it is attributed to
+// the load which failed, if that got far enough to have a handle.
+static uint64_t HistoryLoadIdFromHandles(
+    ParentProcessChannelHandle* aDocumentHandle,
+    ParentProcessChannelHandle* aFailedHandle) {
+  if (uint64_t id = aDocumentHandle ? aDocumentHandle->HistoryLoadId() : 0) {
+    return id;
+  }
+  return aFailedHandle ? aFailedHandle->HistoryLoadId() : 0;
+}
+
 already_AddRefed<WindowGlobalParent> WindowGlobalParent::CreateDisconnected(
     const WindowGlobalInit& aInit, ContentParent* aForProcess) {
   RefPtr<CanonicalBrowsingContext> browsingContext =
@@ -209,7 +220,23 @@ already_AddRefed<WindowGlobalParent> WindowGlobalParent::CreateDisconnected(
     }
   }
 
+  wgp->mDocumentHistoryLoadId = HistoryLoadIdFromHandles(
+      aInit.documentChannelHandle(), aInit.failedChannelHandle());
+
   return wgp.forget();
+}
+
+void WindowGlobalParent::InitFromContentProcess(const FieldValues& aRequested,
+                                                ContentParent* aSource) {
+  MOZ_ASSERT(GetContentParent() == aSource);
+  MOZ_DIAGNOSTIC_ASSERT(!BrowsingContext()->GetWindowContexts().Contains(this),
+                        "must reconcile before Init registers this context");
+
+  Transaction correction;
+  Transaction::ReconcileInitialFields(this, FieldValues(aRequested), aSource,
+                                      correction);
+  Init();
+  correction.SendCorrection(this, aSource);
 }
 
 void WindowGlobalParent::Init() {
@@ -226,12 +253,6 @@ void WindowGlobalParent::Init() {
     cp = static_cast<ContentParent*>(Manager()->Manager());
     processId = cp->ChildID();
   }
-
-  MOZ_DIAGNOSTIC_ASSERT(
-      !BrowsingContext()->GetParent() ||
-          BrowsingContext()->GetEmbedderInnerWindowId(),
-      "When creating a non-root WindowGlobalParent, the WindowGlobalParent "
-      "for our embedder should've already been created.");
 
   // Ensure we have a document URI
   if (!mDocumentURI) {
@@ -325,6 +346,12 @@ already_AddRefed<WindowGlobalParent> WindowGlobalParent::GetByInnerWindowId(
   return WindowContext::GetById(aInnerWindowId).downcast<WindowGlobalParent>();
 }
 
+/* static */
+WindowGlobalParent* WindowGlobalParent::Cast(WindowContext* aContext) {
+  MOZ_RELEASE_ASSERT(XRE_IsParentProcess());
+  return static_cast<WindowGlobalParent*>(aContext);
+}
+
 already_AddRefed<WindowGlobalChild> WindowGlobalParent::GetChildActor() {
   if (!CanSend()) {
     return nullptr;
@@ -334,17 +361,12 @@ already_AddRefed<WindowGlobalChild> WindowGlobalParent::GetChildActor() {
 }
 
 BrowserParent* WindowGlobalParent::GetBrowserParent() const {
-  if (IsInProcess() || !CanSend()) {
-    return nullptr;
-  }
-  return static_cast<BrowserParent*>(Manager());
+  return IsInProcess() ? nullptr : static_cast<BrowserParent*>(Manager());
 }
 
-ContentParent* WindowGlobalParent::GetContentParent() {
-  if (IsInProcess() || !CanSend()) {
-    return nullptr;
-  }
-  return static_cast<ContentParent*>(Manager()->Manager());
+ContentParent* WindowGlobalParent::GetContentParent() const {
+  BrowserParent* browserParent = GetBrowserParent();
+  return browserParent ? browserParent->Manager() : nullptr;
 }
 
 already_AddRefed<nsFrameLoader> WindowGlobalParent::GetRootFrameLoader() {
@@ -359,13 +381,13 @@ already_AddRefed<nsFrameLoader> WindowGlobalParent::GetRootFrameLoader() {
 }
 
 uint64_t WindowGlobalParent::ContentParentId() {
-  RefPtr<BrowserParent> browserParent = GetBrowserParent();
-  return browserParent ? browserParent->Manager()->ChildID() : 0;
+  ContentParent* contentParent = GetContentParent();
+  return contentParent ? contentParent->ChildID() : 0;
 }
 
 int32_t WindowGlobalParent::OsPid() {
-  RefPtr<BrowserParent> browserParent = GetBrowserParent();
-  return browserParent ? browserParent->Manager()->Pid() : -1;
+  ContentParent* contentParent = GetContentParent();
+  return contentParent ? contentParent->Pid() : -1;
 }
 
 // A WindowGlobalPaernt is the root in its process if it has no parent, or its
@@ -676,16 +698,16 @@ IPCResult WindowGlobalParent::RecvRawMessage(const JSActorMessageMeta& aMeta,
   return IPC_OK();
 }
 
-const nsACString& WindowGlobalParent::GetRemoteType() const {
-  if (RefPtr<BrowserParent> browserParent = GetBrowserParent()) {
-    return browserParent->Manager()->GetRemoteType();
+const RemoteType& WindowGlobalParent::GetRemoteType() const {
+  if (ContentParent* contentParent = GetContentParent()) {
+    return contentParent->GetRemoteType();
   }
 
-  return NOT_REMOTE_TYPE;
+  return RemoteType::NotRemote();
 }
 
 void WindowGlobalParent::GetRemoteType(nsACString& aRemoteType) const {
-  aRemoteType = GetRemoteType();
+  aRemoteType = GetRemoteType().Stringify();
 }
 
 void WindowGlobalParent::NotifyContentBlockingEvent(
@@ -879,6 +901,8 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvUpdateChannels(
 
   mDocumentChannel = documentChannel;
   mFailedChannel = failedChannel;
+  mDocumentHistoryLoadId =
+      HistoryLoadIdFromHandles(aDocumentHandle, aFailedHandle);
 
   return IPC_OK();
 }
@@ -1327,9 +1351,8 @@ already_AddRefed<mozilla::dom::Promise> WindowGlobalParent::DrawSnapshot(
   }
 
   nscolor color;
-  if (NS_WARN_IF(!ServoCSSParser::ComputeColor(nullptr, NS_RGB(0, 0, 0),
-                                               aBackgroundColor, &color,
-                                               nullptr, nullptr))) {
+  if (NS_WARN_IF(
+          !ServoCSSParser::ComputeColor(nullptr, aBackgroundColor, &color))) {
     aRv = NS_ERROR_FAILURE;
     return nullptr;
   }
@@ -1343,11 +1366,8 @@ already_AddRefed<mozilla::dom::Promise> WindowGlobalParent::DrawSnapshot(
     flags |= gfx::CrossProcessPaintFlags::ResetScrollPosition;
   }
 
-  if (!gfx::CrossProcessPaint::Start(this, aRect, (float)aScale, color, flags,
-                                     promise)) {
-    aRv = NS_ERROR_FAILURE;
-    return nullptr;
-  }
+  gfx::CrossProcessPaint::Start(this, aRect, (float)aScale, color, flags,
+                                promise);
   return promise.forget();
 }
 
@@ -1383,8 +1403,7 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvExpectPageUseCounters(
   // page use counters.  This causes us to wait for this window to go away
   // (in WindowGlobalParent::ActorDestroy) before reporting the page use
   // counters via Telemetry.
-  RefPtr<WindowGlobalParent> page =
-      static_cast<WindowGlobalParent*>(aTop.GetMaybeDiscarded());
+  RefPtr<WindowGlobalParent> page = Cast(aTop.GetMaybeDiscarded());
   if (!page || page->mSentPageUseCounters) {
     MOZ_LOG(gUseCountersLog, LogLevel::Debug,
             (" > too late, won't report page use counters for this straggler"));
@@ -1668,8 +1687,8 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvSetDocumentDomain(
     return IPC_FAIL(this, "Sandbox disallows domain setting.");
   }
 
-  // Might need to do a featurepolicy check here, like we currently do in the
-  // child process?
+  // Might need to do a permissions policy check here, like we currently do in
+  // the child process?
 
   nsCOMPtr<nsIURI> uri;
   mDocumentPrincipal->GetDomain(getter_AddRefs(uri));
@@ -1888,36 +1907,6 @@ void WindowGlobalParent::ActorDestroy(ActorDestroyReason aWhy) {
 
   if (GetBrowsingContext()->IsTopContent() &&
       !mDocumentPrincipal->SchemeIs("about")) {
-    // Record the mixed content status of the docshell in Telemetry
-    enum {
-      NO_MIXED_CONTENT = 0,  // There is no Mixed Content on the page
-      MIXED_DISPLAY_CONTENT =
-          1,  // The page attempted to load Mixed Display Content
-      MIXED_ACTIVE_CONTENT =
-          2,  // The page attempted to load Mixed Active Content
-      MIXED_DISPLAY_AND_ACTIVE_CONTENT = 3  // The page attempted to load Mixed
-                                            // Display & Mixed Active Content
-    };
-
-    bool hasMixedDisplay =
-        mSecurityState &
-        (nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT |
-         nsIWebProgressListener::STATE_BLOCKED_MIXED_DISPLAY_CONTENT);
-    bool hasMixedActive =
-        mSecurityState &
-        (nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT |
-         nsIWebProgressListener::STATE_BLOCKED_MIXED_ACTIVE_CONTENT);
-
-    uint32_t mixedContentLevel = NO_MIXED_CONTENT;
-    if (hasMixedDisplay && hasMixedActive) {
-      mixedContentLevel = MIXED_DISPLAY_AND_ACTIVE_CONTENT;
-    } else if (hasMixedActive) {
-      mixedContentLevel = MIXED_ACTIVE_CONTENT;
-    } else if (hasMixedDisplay) {
-      mixedContentLevel = MIXED_DISPLAY_CONTENT;
-    }
-    glean::mixed_content::page_load.AccumulateSingleSample(mixedContentLevel);
-
     if (GetDocTreeHadMedia()) {
       glean::media::element_in_page_count.Add(1);
     }
@@ -1945,8 +1934,7 @@ void WindowGlobalParent::ActorDestroy(ActorDestroyReason aWhy) {
   // at end-of-page.
   MaybeReportContentBlockingLog();
   if (!IsInProcess()) {
-    RefPtr<BrowserParent> browserParent =
-        static_cast<BrowserParent*>(Manager());
+    RefPtr<BrowserParent> browserParent = GetBrowserParent();
     if (browserParent) {
       nsCOMPtr<nsILoadContext> loadContext = browserParent->GetLoadContext();
       if (loadContext && !loadContext->UsePrivateBrowsing() &&
@@ -2039,8 +2027,8 @@ nsIGlobalObject* WindowGlobalParent::GetParentObject() {
 }
 
 nsIDOMProcessParent* WindowGlobalParent::GetDomProcess() {
-  if (RefPtr<BrowserParent> browserParent = GetBrowserParent()) {
-    return browserParent->Manager();
+  if (ContentParent* contentParent = GetContentParent()) {
+    return contentParent;
   }
   return InProcessParent::Singleton();
 }
@@ -2064,9 +2052,7 @@ bool WindowGlobalParent::ShouldTrackSiteOriginTelemetry() {
     return false;
   }
 
-  RefPtr<BrowserParent> browserParent = GetBrowserParent();
-  if (!browserParent ||
-      !IsWebRemoteType(browserParent->Manager()->GetRemoteType())) {
+  if (!GetRemoteType().IsWeb()) {
     return false;
   }
 
@@ -2304,7 +2290,7 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvPDocAccessibleConstructor(
 
   RefPtr<WindowGlobalParent> embedderWgp =
       GetBrowsingContext()->GetEmbedderWindowGlobal();
-  if (NS_WARN_IF(!IsTop() && !embedderWgp)) {
+  if (NS_WARN_IF(!IsTop() && (!embedderWgp || embedderWgp->IsDiscarded()))) {
     // This is an iframe, but it doesn't have a valid embedder WindowGlobal.
     // This can happen if the parent BrowsingContext navigated somewhere else
     // while the embedded document was loading. This isn't an error, but it does

@@ -277,7 +277,7 @@ describe("<Weather> (Widgets/Weather)", () => {
       const { container } = renderWeather();
       expect(
         container.querySelector(
-          ".weather-context-menu-button[data-l10n-id='newtab-menu-section-tooltip']"
+          ".weather-context-menu-button[data-l10n-id='newtab-weather-widget-open-menu-button']"
         )
       ).toBeInTheDocument();
     });
@@ -742,6 +742,21 @@ describe("<Weather> (Widgets/Weather)", () => {
         data: expect.objectContaining({ widget_size: "large" }),
       });
     });
+  });
+
+  describe("current conditions summary", () => {
+    // Small visually hides this element in CSS instead of using display: none,
+    // so it stays in the accessibility tree as the weather icon's text
+    // alternative. It must therefore be rendered at every size.
+    it.each(["small", "medium", "large"])(
+      "renders the conditions summary text in the %s size",
+      widgetSize => {
+        const { container } = renderWeather(widgetSize);
+        expect(
+          container.querySelector(".weather-info-description").textContent
+        ).toBe(weatherSuggestion.current_conditions.summary);
+      }
+    );
   });
 
   describe("hourly forecast", () => {

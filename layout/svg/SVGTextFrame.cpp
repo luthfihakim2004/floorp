@@ -295,7 +295,7 @@ static nscoord GetBaselinePosition(nsTextFrame* aFrame,
 
     case StyleDominantBaseline::TextBottom:
     case StyleDominantBaseline::Ideographic:
-      return writingMode.IsVerticalLR() ? 0 : ascent + descent;
+      return convertIfVerticalRL(ascent + descent);
 
     case StyleDominantBaseline::Central:
       return (ascent + descent) / 2.0;
@@ -3075,9 +3075,16 @@ void SVGTextFrame::NotifySVGChanged(ChangeFlags aFlags) {
 
   bool needNewBounds = false;
   bool needGlyphMetricsUpdate = false;
-  if (aFlags.contains(ChangeFlag::CoordContextChanged) &&
-      HasAnyStateBits(NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES)) {
-    needGlyphMetricsUpdate = true;
+  if (aFlags.contains(ChangeFlag::CoordContextChanged)) {
+    if (HasAnyStateBits(NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES)) {
+      needGlyphMetricsUpdate = true;
+    }
+    if (SVGContentUtils::HasPercentageDependentStroke(
+            Style(), SVGContextPaint::GetContextPaint(GetContent())) ||
+        SVGIntegrationUtils::UsingEffectsForFrame(this)) {
+      // Stroke and effects may have percentage dependent units.
+      needNewBounds = true;
+    }
   }
 
   if (aFlags.contains(ChangeFlag::TransformChanged)) {
@@ -3372,31 +3379,12 @@ void SVGTextFrame::ReflowSVG() {
   TextRenderedRunIterator it(
       this, TextRenderedRunIterator::RenderedRunFilter::AllFrames);
   for (TextRenderedRun run = it.Current(); run.mFrame; run = it.Next()) {
-    TextRenderedRun::GeometryFlags runFlags;
-    if (!run.mFrame->StyleSVG()->mFill.kind.IsNone()) {
-      runFlags += TextRenderedRun::GeometryFlag::IncludeFill;
-    }
-    if (SVGUtils::HasStroke(run.mFrame)) {
+    TextRenderedRun::GeometryFlags runFlags{
+        TextRenderedRun::GeometryFlag::IncludeFill};
+    if (!run.mFrame->StyleSVG()->mStroke.kind.IsNone()) {
       runFlags += TextRenderedRun::GeometryFlag::IncludeStroke;
     }
-    // Our "visual" overflow rect needs to be valid for building display lists
-    // for hit testing, which means that for certain values of 'pointer-events'
-    // it needs to include the geometry of the fill or stroke even when the
-    // fill/ stroke don't actually render (e.g. when stroke="none" or
-    // stroke-opacity="0"). GetGeometryHitTestFlags accounts for
-    // 'pointer-events'. The text-shadow is not part of the hit-test area.
-    SVGHitTestFlags hitTestFlags =
-        SVGUtils::GetGeometryHitTestFlags(run.mFrame);
-    if (hitTestFlags.contains(SVGHitTestFlag::Fill)) {
-      runFlags += TextRenderedRun::GeometryFlag::IncludeFill;
-    }
-    if (hitTestFlags.contains(SVGHitTestFlag::Stroke)) {
-      runFlags += TextRenderedRun::GeometryFlag::IncludeStroke;
-    }
-
-    if (!runFlags.isEmpty()) {
-      r.UnionEdges(run.GetUserSpaceRect(presContext, runFlags));
-    }
+    r.UnionEdges(run.GetUserSpaceRect(presContext, runFlags));
   }
 
   if (r.IsEmpty()) {
@@ -3476,11 +3464,19 @@ SVGBBox SVGTextFrame::GetBBoxContribution(const Matrix& aToBBoxUserspace,
     return bbox;
   }
 
+  return GetSubtreeBBox(nullptr, aToBBoxUserspace, aFlags);
+}
+
+SVGBBox SVGTextFrame::GetSubtreeBBox(const nsIFrame* aSubtree,
+                                     const Matrix& aToBBoxUserspace,
+                                     SVGBBoxFlags aFlags) {
   UpdateGlyphPositioning();
 
   nsPresContext* presContext = PresContext();
 
-  TextRenderedRunIterator it(this);
+  SVGBBox bbox;
+  TextRenderedRunIterator it(
+      this, TextRenderedRunIterator::RenderedRunFilter::AllFrames, aSubtree);
   for (TextRenderedRun run = it.Current(); run.mFrame; run = it.Next()) {
     TextRenderedRun::GeometryFlags flags =
         TextRenderedRunFlagsForBBoxContribution(run, aFlags);
@@ -3998,6 +3994,8 @@ already_AddRefed<DOMSVGPoint> SVGTextFrame::GetEndPositionOfChar(
     return nullptr;
   }
 
+  RefPtr<const gfxTextRun> textRun = it.TextRun();
+
   // We need to return the end position of the whole glyph.
   uint32_t startIndex = it.GlyphStartTextElementCharIndex();
   float zoom = it.GetTextFrame()->Style()->EffectiveZoom().ToFloat();
@@ -4007,7 +4005,6 @@ already_AddRefed<DOMSVGPoint> SVGTextFrame::GetEndPositionOfChar(
       GetGlyphAdvance(this, aElement, startIndex,
                       it.IsClusterAndLigatureGroupStart() ? &it : nullptr) /
       mFontSizeScaleFactor;
-  const gfxTextRun* textRun = it.TextRun();
   if (textRun->IsInlineReversed()) {
     advance = -advance;
   }
@@ -4050,7 +4047,7 @@ already_AddRefed<SVGRect> SVGTextFrame::GetExtentOfChar(
 
   nsTextFrame* textFrame = it.GetTextFrame();
   uint32_t startIndex = it.GlyphStartTextElementCharIndex();
-  const gfxTextRun* textRun = it.TextRun();
+  RefPtr<const gfxTextRun> textRun = it.TextRun();
 
   // Get the glyph advance.
   gfxFloat advance =
@@ -4766,7 +4763,7 @@ void SVGTextFrame::DoTextPathLayout() {
 
       MOZ_ASSERT(!mPositions[i].mClusterOrLigatureGroupMiddle);
 
-      const gfxTextRun* textRun = it.TextRun();
+      RefPtr<const gfxTextRun> textRun = it.TextRun();
       bool vertical = textRun->IsVertical();
 
       // Compute cumulative advances for each character of the cluster or
@@ -5442,6 +5439,9 @@ gfxRect SVGTextFrame::TransformFrameRectFromTextChild(
 
     // Scale it into frame user space.
     gfxRect rectInFrameUserSpace = AppUnitsToFloatCSSPixels(rectInTextFrame);
+
+    // Take into account any font size scaling
+    rectInFrameUserSpace.Scale(1.0 / mFontSizeScaleFactor);
 
     // Intersect it with the run.
     TextRenderedRun::GeometryFlags flags(

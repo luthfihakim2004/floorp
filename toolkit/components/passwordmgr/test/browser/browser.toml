@@ -63,6 +63,8 @@ skip-if = [
 
 ["browser_autocomplete_insecure_warning.js"]
 
+["browser_autocomplete_secondary_actions.js"]
+
 ["browser_autocomplete_primary_password.js"]
 
 ["browser_autofill_after_paint.js"]
@@ -74,6 +76,8 @@ skip-if = [
 
 ["browser_autofill_http.js"]
 https_first_disabled = true
+
+["browser_autofill_primary_password.js"]
 
 ["browser_autofill_track_filled_logins.js"]
 
@@ -112,6 +116,11 @@ skip-if = [
   "os == 'android'",
 ]
 
+["browser_doorhanger_autocomplete_color_scheme.js"]
+fail-if = [
+  "a11y_checks", # Bug 1854452 clicked password-notification-username-dropmaker may not be focusable and/or labeled
+]
+
 ["browser_doorhanger_autocomplete_values.js"]
 fail-if = [
   "a11y_checks", # Bug 1854452 clicked password-notification-username-dropmaker may not be focusable and/or labeled
@@ -137,9 +146,6 @@ support-files = [
   "form_password_change.html",
 ]
 skip-if = [
-  "os == 'linux' && os_version == '24.04' && arch == 'x86_64' && display == 'x11'", # Bug 1729196
-  "os == 'mac' && os_version == '10.15' && arch == 'x86_64' && debug", # Bug 1729196
-  "os == 'mac' && os_version == '15.30' && arch == 'aarch64' && opt", # Bug 1729196
   "os == 'win' && os_version == '11.26100' && arch == 'x86_64'", # Bug 1729196
   "os == 'win' && os_version == '11.26200' && arch == 'x86' && opt", # Bug 1729196
   "os == 'win' && os_version == '11.26200' && arch == 'x86_64'", # Bug 1729196
@@ -156,31 +162,18 @@ support-files = [
 ["browser_doorhanger_password_edits.js"]
 
 ["browser_doorhanger_promptToChangePassword.js"]
-skip-if = [
-  "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 1775906
-]
 
 ["browser_doorhanger_remembering.js"]
 
 ["browser_doorhanger_replace_dismissed_with_visible_while_opening.js"]
 
 ["browser_doorhanger_reveal_password.js"]
-skip-if = [
-  "a11y_checks", # Bugs 1858041, 1854454 and 1824058 for causing intermittent crashes
-]
 
 ["browser_doorhanger_save_password.js"]
-skip-if = [
-  "a11y_checks", # Bugs 1858041, 1854454 and 1824058 for causing intermittent crashes
-]
 
 ["browser_doorhanger_submit_telemetry.js"]
 fail-if = [
   "a11y_checks", # Bug 1854452 clicked dropmaker may not be focusable
-]
-skip-if = [
-  "os == 'linux' && os_version == '24.04' && arch == 'x86_64' && display == 'x11' && asan", # Bug 1695395
-  "tsan", # Bug 1661305
 ]
 
 ["browser_doorhanger_target_blank.js"]
@@ -191,9 +184,6 @@ support-files = ["subtst_notifications_12_target_blank.html"]
 ["browser_doorhanger_username_edits.js"]
 
 ["browser_doorhanger_window_open.js"]
-skip-if = [
-  "os == 'win' && os_version == '11.26200' && asan", # Bug 2019745
-]
 support-files = [
   "subtst_notifications_11.html",
   "subtst_notifications_11_popup.html",
@@ -226,10 +216,6 @@ support-files = [
 ]
 
 ["browser_formless_submit_chrome.js"]
-skip-if = [
-  "tsan", # Bug 1683730
-  "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 2062458
-]
 
 ["browser_glean_pwmgr_form_autofill_result.js"]
 
@@ -254,17 +240,13 @@ skip-if = [
 ["browser_openPasswordManager.js"]
 
 ["browser_preselect_login.js"]
-fail-if = [
-  "a11y_checks", # Bug 1854452 clicked ac-secondary-action may not be labeled
-]
 skip-if = [
   "asan",
   "os == 'linux' && os_version == '24.04' && arch == 'x86_64' && display == 'x11' && debug", # Bug 1840479
   "os == 'win' && os_version == '10.2009' && arch == 'x86_64' && debug", # Bug 1840479
-  "os == 'win' && os_version == '11.26100' && debug", # Bug 1840479
-  "os == 'win' && os_version == '11.26200' && debug", # Bug 1840479
-  "tsan",
 ]
+
+["browser_primary_password_reauth.js"]
 
 ["browser_private_window.js"]
 support-files = [
@@ -290,6 +272,11 @@ support-files = ["browser_relay_utils.js"]
 
 ["browser_relay_use.js"]
 support-files = ["browser_relay_utils.js"]
+
+["browser_rust_storage_primary_password.js"]
+skip-if = [
+  "os == 'android'", # The Rust storage backend only runs on desktop
+]
 
 ["browser_telemetry_SignUpFormRuleset.js"]
 

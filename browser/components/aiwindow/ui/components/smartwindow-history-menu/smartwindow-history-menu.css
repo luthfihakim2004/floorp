@@ -26,7 +26,7 @@ moz-button.fullpage-action-button::part(button) {
     --button-background-color-ghost-active: var(--smartwindow-ghost-button-background-active);
     /* Hold the hover fill while the menu is open. */
     --button-background-color-ghost-selected: var(--button-background-color-ghost-hover);
-    --button-text-color-ghost: var(--smartwindow-ghost-button-text);
+    --button-text-color-ghost: var(--smartwindow-text-color);
     --button-icon-fill: currentColor;
   }
 }
@@ -50,10 +50,7 @@ panel-list.history-menu[valign="top"] {
 
 @media -moz-pref("browser.nova.enabled") and (not (forced-colors)) {
   moz-button.fullpage-action-button {
-    /* Resting icon/label use the muted accent (#584a7d / #9687c0); on
-       hover/active/selected they brighten to button/text/color (#fcfbff in
-       dark). The icon tracks the label via currentColor. */
-    --button-text-color-ghost: var(--icon-color-accent-primary-desaturated);
+    --button-text-color-ghost: light-dark(var(--color-violet-desaturated-60), var(--color-violet-desaturated-30));
     --button-text-color-ghost-hover: var(--button-text-color);
     --button-text-color-ghost-active: var(--button-text-color);
     --button-text-color-ghost-selected: var(--button-text-color);
@@ -82,7 +79,7 @@ moz-button.history-menu-button {
     --button-background-color-ghost-active: var(--smartwindow-ghost-button-background-active);
     /* Hold the hover fill while the menu is open. */
     --button-background-color-ghost-selected: var(--button-background-color-ghost-hover);
-    --button-text-color-ghost: var(--smartwindow-ghost-button-text);
+    --button-text-color-ghost: var(--smartwindow-text-color);
 
     @media -moz-pref("browser.nova.enabled") {
       --button-icon-fill: light-dark(var(--color-violet-desaturated-60), var(--color-violet-desaturated-40));
@@ -111,6 +108,7 @@ moz-button.history-menu-button {
       background:
         image(var(--button-background-color-ghost)) padding-box,
         var(--nova-border-gradient) border-box;
+      color: var(--button-text-color-ghost);
     }
 
     &:is(:hover, :active)::part(button) {

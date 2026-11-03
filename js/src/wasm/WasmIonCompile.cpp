@@ -622,7 +622,7 @@ class FunctionCompiler {
     for (size_t i = args.lengthWithoutStackResults(); i < locals_.length();
          i++) {
       ValType slotValType = locals_[i];
-#ifndef ENABLE_WASM_SIMD
+#ifndef ENABLE_JIT_SIMD
       if (slotValType == ValType::V128) {
         return iter().fail("Ion has no SIMD support yet");
       }
@@ -667,7 +667,7 @@ class FunctionCompiler {
     // Initialize all local slots to zero value
     for (size_t i = type.args().length(); i < locals_.length(); i++) {
       ValType slotValType = locals_[i];
-#ifndef ENABLE_WASM_SIMD
+#ifndef ENABLE_JIT_SIMD
       if (slotValType == ValType::V128) {
         return iter().fail("Ion has no SIMD support yet");
       }
@@ -776,7 +776,7 @@ class FunctionCompiler {
   template <typename T>
   MDefinition* constantTargetWord(T) = delete;
 
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
   MDefinition* constantV128(V128 v) {
     if (inDeadCode()) {
       return nullptr;
@@ -807,7 +807,7 @@ class FunctionCompiler {
         return constantI32(0);
       case ValType::I64:
         return constantI64(int64_t(0));
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
       case ValType::V128:
         return constantV128(V128(0));
 #endif
@@ -1282,7 +1282,7 @@ class FunctionCompiler {
     return ins;
   }
 
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
   // About Wasm SIMD as supported by Ion:
   //
   // The expectation is that Ion will only ever support SIMD on x86 and x64,
@@ -1422,7 +1422,7 @@ class FunctionCompiler {
 
   // Also see below for SIMD memory references
 
-#endif  // ENABLE_WASM_SIMD
+#endif  // ENABLE_JIT_SIMD
 
   /************************************************ Linear memory accesses */
 
@@ -1883,7 +1883,7 @@ class FunctionCompiler {
     return binop;
   }
 
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
   MDefinition* loadSplatSimd128(Scalar::Type viewType,
                                 const LinearMemoryAddress<MDefinition*>& addr,
                                 wasm::SimdOp splatOp) {
@@ -1996,7 +1996,7 @@ class FunctionCompiler {
     curBlock_->add(store);
     return true;
   }
-#endif  // ENABLE_WASM_SIMD
+#endif  // ENABLE_JIT_SIMD
 
   /************************************************ Global variable accesses */
 
@@ -2501,7 +2501,7 @@ class FunctionCompiler {
         }
         break;
       }
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
       case MIRType::Simd128:
         MOZ_CRASH("SIMD128 not supported in builtin ABI");
 #endif
@@ -2577,7 +2577,7 @@ class FunctionCompiler {
                                            result.type().toMaybeRefType());
             break;
           case wasm::ValType::V128:
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
             def = MWasmFloatRegisterResult::New(alloc(), MIRType::Simd128,
                                                 result.fpr());
 #else
@@ -5269,10 +5269,11 @@ class FunctionCompiler {
       return nullptr;
     }
 
-    // Create a bounds check.
+    // Create a bounds check. The BCE pass eliminates it when the array was
+    // created with a constant length and the index is a constant in range.
     auto* boundsCheck =
         MWasmBoundsCheck::New(alloc(), index, numElements, trapSiteDesc(),
-                              MWasmBoundsCheck::Target::Other);
+                              MWasmBoundsCheck::Target::Array);
     if (!boundsCheck) {
       return nullptr;
     }
@@ -5601,31 +5602,78 @@ class FunctionCompiler {
     MDefinition* ref = values.back();
     MOZ_ASSERT(ref->type() == MIRType::WasmAnyRef);
 
-    MDefinition* success = refTest(ref, destType);
-    if (!success) {
+    // We generally want to emit an MWasmRefTest, an MTest, and an MWasmRefCast
+    // along the test-success branch. The cast is immovable but should be a
+    // no-op 100% of the time because of our test/cast optimizations.
+
+    MDefinition* refTestSuccess = refTest(ref, destType);
+    if (!refTestSuccess) {
       return false;
     }
 
-    MTest* test;
-    if (onSuccess) {
-      test = MTest::New(alloc(), success, nullptr, fallthroughBlock);
-      if (!test || !addControlFlowPatch(test, labelRelativeDepth,
-                                        MTest::TrueBranchIndex, branchHint)) {
-        return false;
-      }
-    } else {
-      test = MTest::New(alloc(), success, fallthroughBlock, nullptr);
+    if (!onSuccess) {
+      // For br_on_cast_fail, the fallthrough path gets the MWasmRefCast
+      // (because the cast succeeded) and we don't need to do anything fancy for
+      // the success path.
+
+      MTest* test =
+          MTest::New(alloc(), refTestSuccess, fallthroughBlock, nullptr);
       if (!test || !addControlFlowPatch(test, labelRelativeDepth,
                                         MTest::FalseBranchIndex, branchHint)) {
         return false;
       }
+      if (!pushDefs(values)) {
+        return false;
+      }
+      curBlock_->end(test);
+      curBlock_ = fallthroughBlock;
+
+      MDefinition* cast = refCast(ref, destType);
+      if (!cast) {
+        return false;
+      }
+      iter().setResult(cast);
+
+      return true;
     }
 
-    if (!pushDefs(values)) {
+    // For br_on_cast, the fallthrough uses the original ref (since the cast
+    // failed), while the success has a new block containing only the
+    // MWasmRefCast.
+
+    MBasicBlock* successBlock = nullptr;
+    if (!newBlock(curBlock_, &successBlock)) {
       return false;
     }
 
+    MTest* test =
+        MTest::New(alloc(), refTestSuccess, successBlock, fallthroughBlock);
+    if (!test) {
+      return false;
+    }
     curBlock_->end(test);
+    curBlock_ = successBlock;
+
+    MDefinition* cast = refCast(ref, destType);
+    if (!cast) {
+      return false;
+    }
+
+    DefVector castValues;
+    if (!castValues.appendAll(values)) {
+      return false;
+    }
+    castValues.back() = cast;
+    if (!pushDefs(castValues)) {
+      return false;
+    }
+
+    MGoto* jump = MGoto::New(alloc());
+    if (!jump || !addControlFlowPatch(jump, labelRelativeDepth,
+                                      MGoto::TargetIndex, branchHint)) {
+      return false;
+    }
+    curBlock_->end(jump);
     curBlock_ = fallthroughBlock;
     return true;
   }
@@ -5822,6 +5870,7 @@ class FunctionCompiler {
   bool emitResumeThrowRef();
   bool emitSwitch();
   bool emitGuardSuspending();
+  bool emitExternToCont();
 #endif
   bool emitGetLocal();
   bool emitSetLocal();
@@ -6645,7 +6694,7 @@ bool FunctionCompiler::emitGetGlobal() {
       result = constantF64(value.f64());
       break;
     case ValType::V128:
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
       result = constantV128(value.v128());
       break;
 #else
@@ -7317,7 +7366,7 @@ bool FunctionCompiler::emitMemCopyInline(uint32_t memoryIndex, MDefinition* dst,
 
   // Compute the number of copies of each width we will need to do
   size_t remainder = length;
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
   size_t numCopies16 = 0;
   if (MacroAssembler::SupportsFastUnalignedFPAccesses()) {
     numCopies16 = remainder / sizeof(V128);
@@ -7340,7 +7389,7 @@ bool FunctionCompiler::emitMemCopyInline(uint32_t memoryIndex, MDefinition* dst,
   size_t offset = 0;
   DefVector loadedValues;
 
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
   for (uint32_t i = 0; i < numCopies16; i++) {
     MemoryAccessDesc access(memoryIndex, Scalar::Simd128, 1, offset,
                             trapSiteDesc(), hugeMemoryEnabled(memoryIndex));
@@ -7448,7 +7497,7 @@ bool FunctionCompiler::emitMemCopyInline(uint32_t memoryIndex, MDefinition* dst,
   }
 #endif
 
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
   for (uint32_t i = 0; i < numCopies16; i++) {
     offset -= sizeof(V128);
 
@@ -7575,7 +7624,7 @@ bool FunctionCompiler::emitMemFillInline(uint32_t memoryIndex,
 
   // Compute the number of copies of each width we will need to do
   size_t remainder = length;
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
   size_t numCopies16 = 0;
   if (MacroAssembler::SupportsFastUnalignedFPAccesses()) {
     numCopies16 = remainder / sizeof(V128);
@@ -7593,7 +7642,7 @@ bool FunctionCompiler::emitMemFillInline(uint32_t memoryIndex,
   size_t numCopies1 = remainder;
 
   // Generate splatted definitions for wider fills as needed
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
   MDefinition* val16 = numCopies16 ? constantV128(V128(value)) : nullptr;
 #endif
 #ifdef JS_64BIT
@@ -7655,7 +7704,7 @@ bool FunctionCompiler::emitMemFillInline(uint32_t memoryIndex,
   }
 #endif
 
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
   for (uint32_t i = 0; i < numCopies16; i++) {
     offset -= sizeof(V128);
 
@@ -8212,7 +8261,7 @@ bool FunctionCompiler::emitI64MulWide(bool isSigned) {
 //
 // SIMD support
 
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
 bool FunctionCompiler::emitConstSimd128() {
   V128 v128;
   if (!iter().readV128Const(&v128)) {
@@ -8395,7 +8444,7 @@ bool FunctionCompiler::emitStoreLaneSimd128(uint32_t laneSize) {
   return storeLaneSimd128(laneSize, addr, laneIndex, src);
 }
 
-#endif  // ENABLE_WASM_SIMD
+#endif  // ENABLE_JIT_SIMD
 
 bool FunctionCompiler::emitRefAsNonNull() {
   MDefinition* ref;
@@ -9852,6 +9901,17 @@ bool FunctionCompiler::emitGuardSuspending() {
   return true;
 }
 
+bool FunctionCompiler::emitExternToCont() {
+  uint32_t contTypeIndex;
+  MDefinition* ref;
+  if (!iter().readExternToCont(&contTypeIndex, &ref)) {
+    return false;
+  }
+
+  iter().setResult(ref);
+  return true;
+}
+
 #endif  // ENABLE_WASM_JSPI
 
 bool FunctionCompiler::emitBodyExprs() {
@@ -10246,8 +10306,7 @@ bool FunctionCompiler::emitBodyExprs() {
       case uint16_t(Op::F32ConvertI32S):
         CHECK(emitConversion<MToFloat32>(ValType::I32, ValType::F32));
       case uint16_t(Op::F32ConvertI32U):
-        CHECK(
-            emitConversion<MWasmUnsignedToFloat32>(ValType::I32, ValType::F32));
+        CHECK(emitConversion<MUnsignedToFloat32>(ValType::I32, ValType::F32));
       case uint16_t(Op::F32ConvertI64S):
       case uint16_t(Op::F32ConvertI64U):
         CHECK(emitConvertI64ToFloatingPoint(ValType::F32, MIRType::Float32,
@@ -10257,8 +10316,7 @@ bool FunctionCompiler::emitBodyExprs() {
       case uint16_t(Op::F64ConvertI32S):
         CHECK(emitConversion<MToDouble>(ValType::I32, ValType::F64));
       case uint16_t(Op::F64ConvertI32U):
-        CHECK(
-            emitConversion<MWasmUnsignedToDouble>(ValType::I32, ValType::F64));
+        CHECK(emitConversion<MUnsignedToDouble>(ValType::I32, ValType::F64));
       case uint16_t(Op::F64ConvertI64S):
       case uint16_t(Op::F64ConvertI64U):
         CHECK(emitConvertI64ToFloatingPoint(ValType::F64, MIRType::Double,
@@ -10438,7 +10496,7 @@ bool FunctionCompiler::emitBodyExprs() {
       }
 
       // SIMD operations
-#ifdef ENABLE_WASM_SIMD
+#ifdef ENABLE_JIT_SIMD
       case uint16_t(Op::SimdPrefix): {
         if (!codeMeta().simdAvailable()) {
           return iter().unrecognizedOpcode(&op);
@@ -11026,6 +11084,8 @@ bool FunctionCompiler::emitBodyExprs() {
 #ifdef ENABLE_WASM_JSPI
           case uint32_t(MozOp::GuardSuspending):
             CHECK(emitGuardSuspending());
+          case uint32_t(MozOp::ExternToCont):
+            CHECK(emitExternToCont());
 #endif  // ENABLE_WASM_JSPI
 
           default:

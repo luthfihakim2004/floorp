@@ -3,18 +3,17 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use crate::cow_rc_str::CowRcStr;
-use crate::tokenizer::{SourceLocation, SourcePosition, Token, Tokenizer};
+use crate::tokenizer::{SeenStatus, SourceLocation, SourcePosition, Token};
 use smallvec::SmallVec;
 use std::fmt;
 use std::ops::BitOr;
-use std::ops::Range;
 
 /// A capture of the internal state of a `Parser` (including the position within the input),
 /// obtained from the `Parser::position` method.
 ///
 /// Can be used with the `Parser::reset` method to restore that state.
 /// Should only be used with the `Parser` instance it came from.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ParserState {
     pub(crate) position: usize,
     pub(crate) current_line_start_position: usize,
@@ -157,8 +156,8 @@ impl<T> ParseErrorKind<T> {
 impl<E: fmt::Display> fmt::Display for ParseErrorKind<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ParseErrorKind::Basic(ref basic) => basic.fmt(f),
-            ParseErrorKind::Custom(ref custom) => custom.fmt(f),
+            ParseErrorKind::Basic(basic) => basic.fmt(f),
+            ParseErrorKind::Custom(custom) => custom.fmt(f),
         }
     }
 }
@@ -220,56 +219,25 @@ impl<E: fmt::Display> fmt::Display for ParseError<E> {
 
 impl<E: fmt::Display + fmt::Debug> std::error::Error for ParseError<E> {}
 
-/// The owned input for a parser.
-pub struct ParserInput<'i> {
-    tokenizer: Tokenizer<'i>,
-    cached_token: Option<CachedToken<'i>>,
+/// A CSS parser that borrows its `&str` input, yields `Token`s, and keeps track of nested blocks
+/// and functions.
+pub struct Parser<'i> {
+    pub(crate) input: &'i str,
+    pub(crate) state: ParserState,
+    cached_token: CachedToken<'i>,
     current_block_depth: u8,
     nested_block_limit: u8,
+    /// For parsers from `parse_until` or `parse_nested_block`
+    stop_before: Delimiters,
+    pub(crate) arbitrary_substitution_functions: SeenStatus<'i>,
+    pub(crate) source_map_url: Option<&'i str>,
+    pub(crate) source_url: Option<&'i str>,
 }
 
 struct CachedToken<'i> {
     token: Token<'i>,
     start_position: SourcePosition,
     end_state: ParserState,
-}
-
-impl<'i> ParserInput<'i> {
-    /// 75 nested blocks seems reasonable enough.
-    const REASONABLE_NESTED_BLOCK_LIMIT: u8 = 75;
-
-    /// Create a new input for a parser.
-    pub fn new(input: &'i str) -> ParserInput<'i> {
-        ParserInput {
-            tokenizer: Tokenizer::new(input),
-            nested_block_limit: Self::REASONABLE_NESTED_BLOCK_LIMIT,
-            current_block_depth: 0,
-            cached_token: None,
-        }
-    }
-
-    /// Sets a limit for how many nested blocks we're allowed to parse. This is useful to avoid
-    /// running out of stack space. By default, it's set to `REASONABLE_NESTED_BLOCK_LIMIT`, but it
-    /// can be overridden or cleared. A limit of 0 will be equivalent to no limit at all.
-    pub fn set_nested_block_limit(&mut self, limit: u8) {
-        self.nested_block_limit = limit;
-    }
-
-    #[inline]
-    fn cached_token_ref(&self) -> &Token<'i> {
-        &self.cached_token.as_ref().unwrap().token
-    }
-}
-
-/// A CSS parser that borrows its `&str` input,
-/// yields `Token`s,
-/// and keeps track of nested blocks and functions.
-pub struct Parser<'i, 't> {
-    input: &'t mut ParserInput<'i>,
-    /// If `Some(_)`, .parse_nested_block() can be called.
-    at_start_of: Option<BlockType>,
-    /// For parsers from `parse_until` or `parse_nested_block`
-    stop_before: Delimiters,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -280,15 +248,6 @@ pub(crate) enum BlockType {
 }
 
 impl BlockType {
-    fn opening(token: &Token) -> Option<BlockType> {
-        match *token {
-            Token::Function(_) | Token::ParenthesisBlock => Some(BlockType::Parenthesis),
-            Token::SquareBracketBlock => Some(BlockType::SquareBracket),
-            Token::CurlyBracketBlock => Some(BlockType::CurlyBracket),
-            _ => None,
-        }
-    }
-
     fn closing(token: &Token) -> Option<BlockType> {
         match *token {
             Token::CloseParenthesis => Some(BlockType::Parenthesis),
@@ -355,7 +314,7 @@ impl Delimiters {
     }
 
     #[inline]
-    pub(crate) fn from_byte(byte: Option<u8>) -> Delimiters {
+    pub(crate) fn from_byte(byte: u8) -> Delimiters {
         const TABLE: [Delimiters; 256] = {
             let mut table = [Delimiter::None; 256];
             table[b';' as usize] = Delimiter::Semicolon;
@@ -368,8 +327,7 @@ impl Delimiters {
             table
         };
 
-        assert_eq!(TABLE[0], Delimiter::None);
-        TABLE[byte.unwrap_or(0) as usize]
+        TABLE[byte as usize]
     }
 }
 
@@ -391,20 +349,35 @@ macro_rules! expect {
 /// See https://drafts.csswg.org/css-values-5/#arbitrary-substitution
 pub type ArbitrarySubstitutionFunctions<'a> = &'a [&'static str];
 
-impl<'i: 't, 't> Parser<'i, 't> {
-    /// Create a new parser
+impl<'i> Parser<'i> {
+    /// 75 nested blocks seems reasonable enough.
+    const REASONABLE_NESTED_BLOCK_LIMIT: u8 = 75;
+
+    /// Create a new parser for the given input.
     #[inline]
-    pub fn new(input: &'t mut ParserInput<'i>) -> Parser<'i, 't> {
-        Parser {
+    pub fn new(input: &'i str) -> Self {
+        Self {
             input,
-            at_start_of: None,
+            state: ParserState::default(),
             stop_before: Delimiter::None,
+            nested_block_limit: Self::REASONABLE_NESTED_BLOCK_LIMIT,
+            current_block_depth: 0,
+            cached_token: CachedToken {
+                token: Token::Semicolon,                    // Anything would do.
+                start_position: SourcePosition(usize::MAX), // No token would match this cache.
+                end_state: ParserState::default(),
+            },
+            arbitrary_substitution_functions: SeenStatus::DontCare,
+            source_map_url: None,
+            source_url: None,
         }
     }
 
-    /// Return the current line that is being parsed.
-    pub fn current_line(&self) -> &'i str {
-        self.input.tokenizer.current_source_line()
+    /// Sets a limit for how many nested blocks we're allowed to parse. This is useful to avoid
+    /// running out of stack space. By default, it's set to `REASONABLE_NESTED_BLOCK_LIMIT`, but it
+    /// can be overridden or cleared. A limit of 0 will be equivalent to no limit at all.
+    pub fn set_nested_block_limit(&mut self, limit: u8) {
+        self.nested_block_limit = limit;
     }
 
     /// Check whether the input is exhausted. That is, if `.next()` would return a token.
@@ -434,38 +407,6 @@ impl<'i: 't, 't> Parser<'i, 't> {
         result
     }
 
-    /// Return the current position within the input.
-    ///
-    /// This can be used with the `Parser::slice` and `slice_from` methods.
-    #[inline]
-    pub fn position(&self) -> SourcePosition {
-        self.input.tokenizer.position()
-    }
-
-    /// The current line number and column number.
-    #[inline]
-    pub fn current_source_location(&self) -> SourceLocation {
-        self.input.tokenizer.current_source_location()
-    }
-
-    /// The source map URL, if known.
-    ///
-    /// The source map URL is extracted from a specially formatted
-    /// comment.  The last such comment is used, so this value may
-    /// change as parsing proceeds.
-    pub fn current_source_map_url(&self) -> Option<&str> {
-        self.input.tokenizer.current_source_map_url()
-    }
-
-    /// The source URL, if known.
-    ///
-    /// The source URL is extracted from a specially formatted
-    /// comment.  The last such comment is used, so this value may
-    /// change as parsing proceeds.
-    pub fn current_source_url(&self) -> Option<&str> {
-        self.input.tokenizer.current_source_url()
-    }
-
     /// Create a new unexpected token or EOF ParseError at the current location
     #[inline]
     pub fn new_error_for_next_token<E>(&mut self) -> ParseError<E> {
@@ -480,38 +421,18 @@ impl<'i: 't, 't> Parser<'i, 't> {
     /// This state can later be restored with the `Parser::reset` method.
     #[inline]
     pub fn state(&self) -> ParserState {
-        ParserState {
-            at_start_of: self.at_start_of,
-            ..self.input.tokenizer.state()
-        }
+        self.state.clone()
     }
 
-    /// Advance the input until the next token that’s not whitespace or a comment.
+    /// Like `next_byte`, but returns `None` if the next byte is one of the delimiters this
+    /// parser was told to stop before.
     #[inline]
-    pub fn skip_whitespace(&mut self) {
-        if let Some(block_type) = self.at_start_of.take() {
-            consume_until_end_of_block(block_type, &mut self.input.tokenizer);
-        }
-
-        self.input.tokenizer.skip_whitespace()
-    }
-
-    #[inline]
-    pub(crate) fn skip_cdc_and_cdo(&mut self) {
-        if let Some(block_type) = self.at_start_of.take() {
-            consume_until_end_of_block(block_type, &mut self.input.tokenizer);
-        }
-
-        self.input.tokenizer.skip_cdc_and_cdo()
-    }
-
-    #[inline]
-    pub(crate) fn next_byte(&self) -> Option<u8> {
-        let byte = self.input.tokenizer.next_byte();
+    pub(crate) fn next_byte_before_delimiter(&self) -> Option<u8> {
+        let byte = self.next_byte()?;
         if self.stop_before.contains(Delimiters::from_byte(byte)) {
             return None;
         }
-        byte
+        Some(byte)
     }
 
     /// Restore the internal state of the parser (including position within the input)
@@ -520,34 +441,14 @@ impl<'i: 't, 't> Parser<'i, 't> {
     /// Should only be used with `SourcePosition` values from the same `Parser` instance.
     #[inline]
     pub fn reset(&mut self, state: &ParserState) {
-        self.input.tokenizer.reset(state);
-        self.at_start_of = state.at_start_of;
-    }
-
-    /// Start looking for arbitrary substitution functions like `var()` / `env()` functions.
-    /// (See the `.seen_arbitrary_substitution_functions()` method.)
-    #[inline]
-    pub fn look_for_arbitrary_substitution_functions(
-        &mut self,
-        fns: ArbitrarySubstitutionFunctions<'i>,
-    ) {
-        self.input
-            .tokenizer
-            .look_for_arbitrary_substitution_functions(fns)
-    }
-
-    /// Return whether a relevant function has been seen by the tokenizer since
-    /// `look_for_arbitrary_substitution_functions` was called, and stop looking.
-    #[inline]
-    pub fn seen_arbitrary_substitution_functions(&mut self) -> bool {
-        self.input.tokenizer.seen_arbitrary_substitution_functions()
+        self.state = state.clone();
     }
 
     /// The old name of `try_parse`, which requires raw identifiers in the Rust 2018 edition.
     #[inline]
     pub fn r#try<F, T, E>(&mut self, thing: F) -> Result<T, E>
     where
-        F: FnOnce(&mut Parser<'i, 't>) -> Result<T, E>,
+        F: FnOnce(&mut Parser<'i>) -> Result<T, E>,
     {
         self.try_parse(thing)
     }
@@ -559,7 +460,7 @@ impl<'i: 't, 't> Parser<'i, 't> {
     #[inline]
     pub fn try_parse<F, T, E>(&mut self, thing: F) -> Result<T, E>
     where
-        F: FnOnce(&mut Parser<'i, 't>) -> Result<T, E>,
+        F: FnOnce(&mut Parser<'i>) -> Result<T, E>,
     {
         let start = self.state();
         let result = thing(self);
@@ -567,18 +468,6 @@ impl<'i: 't, 't> Parser<'i, 't> {
             self.reset(&start)
         }
         result
-    }
-
-    /// Return a slice of the CSS input
-    #[inline]
-    pub fn slice(&self, range: Range<SourcePosition>) -> &'i str {
-        self.input.tokenizer.slice(range)
-    }
-
-    /// Return a slice of the CSS input, from the given position to the current one.
-    #[inline]
-    pub fn slice_from(&self, start_position: SourcePosition) -> &'i str {
-        self.input.tokenizer.slice_from(start_position)
     }
 
     /// Return the next token in the input that is neither whitespace or a comment,
@@ -600,14 +489,10 @@ impl<'i: 't, 't> Parser<'i, 't> {
 
     /// Same as `Parser::next`, but does not skip whitespace tokens.
     pub fn next_including_whitespace(&mut self) -> Result<&Token<'i>, BasicParseError> {
-        loop {
-            match self.next_including_whitespace_and_comments() {
-                Err(e) => return Err(e),
-                Ok(&Token::Comment(_)) => {}
-                _ => break,
-            }
+        while let Token::Comment(..) = self.next_including_whitespace_and_comments()? {
+            // Keep going
         }
-        Ok(self.input.cached_token_ref())
+        Ok(&self.cached_token.token)
     }
 
     /// Same as `Parser::next`, but does not skip whitespace or comment tokens.
@@ -619,44 +504,26 @@ impl<'i: 't, 't> Parser<'i, 't> {
     pub fn next_including_whitespace_and_comments(
         &mut self,
     ) -> Result<&Token<'i>, BasicParseError> {
-        if let Some(block_type) = self.at_start_of.take() {
-            consume_until_end_of_block(block_type, &mut self.input.tokenizer);
-        }
+        self.skip_block_at_start();
 
-        let byte = self.input.tokenizer.next_byte();
-        if self.stop_before.contains(Delimiters::from_byte(byte)) {
+        if self.next_byte_before_delimiter().is_none() {
             return Err(BasicParseError::new(BasicParseErrorKind::EndOfInput));
         }
 
-        let token_start_position = self.input.tokenizer.position();
-        let using_cached_token = self
-            .input
-            .cached_token
-            .as_ref()
-            .is_some_and(|cached_token| cached_token.start_position == token_start_position);
-        let token = if using_cached_token {
-            let cached_token = self.input.cached_token.as_ref().unwrap();
-            self.input.tokenizer.reset(&cached_token.end_state);
-            if let Token::Function(ref name) = cached_token.token {
-                self.input.tokenizer.see_function(name)
-            }
-            &cached_token.token
+        let token_start_position = self.position();
+        let using_cached_token = self.cached_token.start_position == token_start_position;
+        if using_cached_token {
+            self.state = self.cached_token.end_state.clone();
         } else {
-            let Ok(new_token) = self.input.tokenizer.next() else {
-                return Err(BasicParseError::new(BasicParseErrorKind::EndOfInput));
-            };
-            self.input.cached_token = Some(CachedToken {
+            let new_token = self.next_unchecked();
+            self.cached_token = CachedToken {
                 token: new_token,
                 start_position: token_start_position,
-                end_state: self.input.tokenizer.state(),
-            });
-            self.input.cached_token_ref()
-        };
-
-        if let Some(block_type) = BlockType::opening(token) {
-            self.at_start_of = Some(block_type);
+                end_state: self.state.clone(),
+            };
         }
-        Ok(token)
+
+        Ok(&self.cached_token.token)
     }
 
     /// Have the given closure parse something, then check the the input is exhausted.
@@ -666,7 +533,7 @@ impl<'i: 't, 't> Parser<'i, 't> {
     #[inline]
     pub fn parse_entirely<F, T, E>(&mut self, parse: F) -> Result<T, ParseError<E>>
     where
-        F: FnOnce(&mut Parser<'i, 't>) -> Result<T, ParseError<E>>,
+        F: FnOnce(&mut Parser<'i>) -> Result<T, ParseError<E>>,
     {
         let result = parse(self)?;
         self.expect_exhausted()?;
@@ -687,7 +554,7 @@ impl<'i: 't, 't> Parser<'i, 't> {
     #[inline]
     pub fn parse_comma_separated<F, T, E>(&mut self, parse_one: F) -> Result<Vec<T>, ParseError<E>>
     where
-        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
+        F: FnMut(&mut Parser<'i>) -> Result<T, ParseError<E>>,
     {
         self.parse_comma_separated_internal(parse_one, /* ignore_errors = */ false)
     }
@@ -700,7 +567,7 @@ impl<'i: 't, 't> Parser<'i, 't> {
     #[inline]
     pub fn parse_comma_separated_ignoring_errors<F, T, E>(&mut self, parse_one: F) -> Vec<T>
     where
-        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
+        F: FnMut(&mut Parser<'i>) -> Result<T, ParseError<E>>,
     {
         match self.parse_comma_separated_internal(parse_one, /* ignore_errors = */ true) {
             Ok(values) => values,
@@ -715,7 +582,7 @@ impl<'i: 't, 't> Parser<'i, 't> {
         ignore_errors: bool,
     ) -> Result<Vec<T>, ParseError<E>>
     where
-        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
+        F: FnMut(&mut Parser<'i>) -> Result<T, ParseError<E>>,
     {
         // Vec grows from 0 to 4 by default on first push().  So allocate with
         // capacity 1, so in the somewhat common case of only one item we don't
@@ -751,7 +618,7 @@ impl<'i: 't, 't> Parser<'i, 't> {
     #[inline]
     pub fn parse_nested_block<F, T, E>(&mut self, parse: F) -> Result<T, ParseError<E>>
     where
-        F: for<'tt> FnOnce(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
+        F: FnOnce(&mut Parser<'i>) -> Result<T, ParseError<E>>,
     {
         parse_nested_block(self, parse)
     }
@@ -771,7 +638,7 @@ impl<'i: 't, 't> Parser<'i, 't> {
         parse: F,
     ) -> Result<T, ParseError<E>>
     where
-        F: for<'tt> FnOnce(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
+        F: FnOnce(&mut Parser<'i>) -> Result<T, ParseError<E>>,
     {
         parse_until_before(self, delimiters, ParseUntilErrorBehavior::Consume, parse)
     }
@@ -788,7 +655,7 @@ impl<'i: 't, 't> Parser<'i, 't> {
         parse: F,
     ) -> Result<T, ParseError<E>>
     where
-        F: for<'tt> FnOnce(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
+        F: FnOnce(&mut Parser<'i>) -> Result<T, ParseError<E>>,
     {
         parse_until_after(self, delimiters, ParseUntilErrorBehavior::Consume, parse)
     }
@@ -1009,144 +876,122 @@ impl<'i: 't, 't> Parser<'i, 't> {
     }
 }
 
-pub fn parse_until_before<'i: 't, 't, F, T, E>(
-    parser: &mut Parser<'i, 't>,
+pub fn parse_until_before<'i, F, T, E>(
+    parser: &mut Parser<'i>,
     delimiters: Delimiters,
     error_behavior: ParseUntilErrorBehavior,
     parse: F,
 ) -> Result<T, ParseError<E>>
 where
-    F: for<'tt> FnOnce(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
+    F: FnOnce(&mut Parser<'i>) -> Result<T, ParseError<E>>,
 {
+    let old_stop_before = parser.stop_before;
     let delimiters = parser.stop_before | delimiters;
-    let result;
-    // Introduce a new scope to limit duration of nested_parser’s borrow
-    {
-        let mut delimited_parser = Parser {
-            input: parser.input,
-            at_start_of: parser.at_start_of.take(),
-            stop_before: delimiters,
-        };
-        result = delimited_parser.parse_entirely(parse);
-        if error_behavior == ParseUntilErrorBehavior::Stop && result.is_err() {
-            return result;
-        }
-        if let Some(block_type) = delimited_parser.at_start_of {
-            consume_until_end_of_block(block_type, &mut delimited_parser.input.tokenizer);
-        }
+    parser.stop_before = delimiters;
+    let result = parser.parse_entirely(parse);
+    parser.stop_before = old_stop_before;
+    if error_behavior == ParseUntilErrorBehavior::Stop && result.is_err() {
+        return result;
     }
+    parser.skip_block_at_start();
     // FIXME: have a special-purpose tokenizer method for this that does less work.
-    loop {
-        if delimiters.contains(Delimiters::from_byte(parser.input.tokenizer.next_byte())) {
+    while let Some(next_byte) = parser.next_byte() {
+        if delimiters.contains(Delimiters::from_byte(next_byte)) {
             break;
         }
-        if let Ok(token) = parser.input.tokenizer.next() {
-            if let Some(block_type) = BlockType::opening(&token) {
-                consume_until_end_of_block(block_type, &mut parser.input.tokenizer);
-            }
-        } else {
-            break;
-        }
+        parser.next_unchecked();
+        parser.skip_block_at_start();
     }
     result
 }
 
-pub fn parse_until_after<'i: 't, 't, F, T, E>(
-    parser: &mut Parser<'i, 't>,
+pub fn parse_until_after<'i, F, T, E>(
+    parser: &mut Parser<'i>,
     delimiters: Delimiters,
     error_behavior: ParseUntilErrorBehavior,
     parse: F,
 ) -> Result<T, ParseError<E>>
 where
-    F: for<'tt> FnOnce(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
+    F: FnOnce(&mut Parser<'i>) -> Result<T, ParseError<E>>,
 {
     let result = parse_until_before(parser, delimiters, error_behavior, parse);
     if error_behavior == ParseUntilErrorBehavior::Stop && result.is_err() {
         return result;
     }
-    let next_byte = parser.input.tokenizer.next_byte();
-    if next_byte.is_some()
-        && !parser
-            .stop_before
-            .contains(Delimiters::from_byte(next_byte))
-    {
-        debug_assert!(delimiters.contains(Delimiters::from_byte(next_byte)));
-        // We know this byte is ASCII.
-        parser.input.tokenizer.advance(1);
-        if next_byte == Some(b'{') {
-            consume_until_end_of_block(BlockType::CurlyBracket, &mut parser.input.tokenizer);
+    if let Some(next_byte) = parser.next_byte() {
+        let delimiter = Delimiters::from_byte(next_byte);
+        if !parser.stop_before.contains(delimiter) {
+            debug_assert!(delimiters.contains(delimiter));
+            // We know this byte is ASCII.
+            parser.advance(1);
+            if next_byte == b'{' {
+                parser.consume_until_end_of_block(BlockType::CurlyBracket);
+            }
         }
     }
     result
 }
 
-pub fn parse_nested_block<'i: 't, 't, F, T, E>(
-    parser: &mut Parser<'i, 't>,
+pub fn parse_nested_block<'i, F, T, E>(
+    parser: &mut Parser<'i>,
     parse: F,
 ) -> Result<T, ParseError<E>>
 where
-    F: for<'tt> FnOnce(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
+    F: FnOnce(&mut Parser<'i>) -> Result<T, ParseError<E>>,
 {
-    let block_type = parser.at_start_of.take().expect(
+    let block_type = parser.state.at_start_of.take().expect(
         "\
          A nested parser can only be created when a Function, \
          ParenthesisBlock, SquareBracketBlock, or CurlyBracketBlock \
          token was just consumed.\
          ",
     );
-    if parser.input.current_block_depth >= parser.input.nested_block_limit
-        && parser.input.nested_block_limit != 0
-    {
+    if parser.current_block_depth >= parser.nested_block_limit && parser.nested_block_limit != 0 {
         return Err(ParseError::from_basic_kind(
             BasicParseErrorKind::TooManyNestedBlocks,
         ));
     }
     // Fine to use wrapping addition, overflow can only occur without a limit.
-    parser.input.current_block_depth = parser.input.current_block_depth.wrapping_add(1);
+    parser.current_block_depth = parser.current_block_depth.wrapping_add(1);
 
-    let closing_delimiter = match block_type {
+    let old_stop_before = parser.stop_before;
+    parser.stop_before = match block_type {
         BlockType::CurlyBracket => ClosingDelimiter::CloseCurlyBracket,
         BlockType::SquareBracket => ClosingDelimiter::CloseSquareBracket,
         BlockType::Parenthesis => ClosingDelimiter::CloseParenthesis,
     };
-    let result;
-    // Introduce a new scope to limit duration of nested_parser’s borrow
-    {
-        let mut nested_parser = Parser {
-            input: parser.input,
-            at_start_of: None,
-            stop_before: closing_delimiter,
-        };
-        result = nested_parser.parse_entirely(parse);
-        if let Some(block_type) = nested_parser.at_start_of {
-            consume_until_end_of_block(block_type, &mut nested_parser.input.tokenizer);
-        }
-    }
-    consume_until_end_of_block(block_type, &mut parser.input.tokenizer);
-    // See above.
-    parser.input.current_block_depth = parser.input.current_block_depth.wrapping_sub(1);
+    let result = parser.parse_entirely(parse);
+    parser.skip_block_at_start();
+    parser.consume_until_end_of_block(block_type);
+    parser.stop_before = old_stop_before;
+    parser.current_block_depth = parser.current_block_depth.wrapping_sub(1);
     result
 }
 
-#[inline(never)]
-#[cold]
-fn consume_until_end_of_block(block_type: BlockType, tokenizer: &mut Tokenizer) {
-    let mut stack = SmallVec::<[BlockType; 16]>::new();
-    stack.push(block_type);
+impl Parser<'_> {
+    /// Consume tokens until the end of a block of the given type that we're at the start of,
+    /// ignoring any `stop_before` delimiters.
+    #[inline(never)]
+    #[cold]
+    pub(crate) fn consume_until_end_of_block(&mut self, block_type: BlockType) {
+        let mut stack = SmallVec::<[BlockType; 16]>::new();
+        stack.push(block_type);
 
-    // FIXME: have a special-purpose tokenizer method for this that does less work.
-    while let Ok(ref token) = tokenizer.next() {
-        if let Some(b) = BlockType::closing(token) {
-            if *stack.last().unwrap() == b {
-                stack.pop();
-                if stack.is_empty() {
-                    return;
+        // FIXME: have a special-purpose tokenizer method for this that does less work.
+        while !self.is_eof() {
+            let token = self.next_unchecked();
+            if let Some(nested_block_type) = self.state.at_start_of.take() {
+                stack.push(nested_block_type);
+                continue;
+            }
+            if let Some(b) = BlockType::closing(&token) {
+                if *stack.last().unwrap() == b {
+                    stack.pop();
+                    if stack.is_empty() {
+                        return;
+                    }
                 }
             }
-        }
-
-        if let Some(block_type) = BlockType::opening(token) {
-            stack.push(block_type);
         }
     }
 }

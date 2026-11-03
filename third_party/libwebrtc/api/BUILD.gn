@@ -303,6 +303,8 @@ if (!build_with_mozilla) {
   visibility = [ "*" ]
 
   sources = [
+    "encoded_audio_frame_injector_interface.h",
+    "encoded_video_frame_injector_interface.h",
     "rtp_sender_interface.cc",
     "rtp_sender_interface.h",
   ]
@@ -455,6 +457,7 @@ rtc_library("peer_connection_interface") {
   sources = [
     "peer_connection_interface.cc",
     "peer_connection_interface.h",
+    "peer_connection_tracer_interface.h",
   ]
   deps = [
     ":async_dns_resolver",
@@ -759,8 +762,6 @@ rtc_source_set("rtp_header_extension_id") {
   sources = [ "rtp_header_extension_id.h" ]
   deps = [
     "../rtc_base:checks",
-    "../rtc_base:strong_alias",
-    "//third_party/abseil-cpp/absl/base:core_headers",
     "//third_party/abseil-cpp/absl/strings:str_format",
   ]
 }
@@ -786,7 +787,6 @@ rtc_library("rtp_parameters") {
     "../rtc_base/system:rtc_export",
     "video:resolution",
     "video_codecs:scalability_mode",
-    "//third_party/abseil-cpp/absl/base:core_headers",
     "//third_party/abseil-cpp/absl/container:inlined_vector",
     "//third_party/abseil-cpp/absl/strings",
     "//third_party/abseil-cpp/absl/strings:str_format",
@@ -902,6 +902,7 @@ if (rtc_include_tests) {
         "../video/config:encoder_config",
         "transport:bitrate_settings",
         "transport:network_control",
+        "units:time_delta",
         "video_codecs:scalability_mode",
         "video_codecs:video_codecs_api",
       ]
@@ -1354,6 +1355,7 @@ if (rtc_include_tests) {
 
     deps = [
       ":media_stream_interface",
+      ":rtp_packet_info",
       "../test:test_support",
     ]
   }
@@ -1868,6 +1870,7 @@ if (rtc_include_tests) {
       "video:video_frame",
       "video:video_frame_metadata",
       "video:video_frame_metadata_unittest",
+      "video:video_frame_type",
       "video/corruption_detection:corruption_detection_unittests",
       "video/corruption_detection:frame_instrumentation_data_reader_unittest",
       "video/corruption_detection:frame_instrumentation_data_unittest",
@@ -1987,8 +1990,17 @@ rtc_library("frame_transformer_factory") {
     ":payload_type",
     "../audio",
     "../modules/rtp_rtcp",
+    "../modules/rtp_rtcp:rtp_video_header",
+    "../modules/video_coding:codec_globals_headers",
     "../rtc_base:checks",
     "../rtc_base/system:rtc_export",
+    "units:time_delta",
+    "units:timestamp",
+    "video:encoded_image",
+    "video:video_frame",
+    "video:video_frame_metadata",
+    "video:video_frame_type",
+    "video_codecs:video_codecs_api",
   ]
 }
 

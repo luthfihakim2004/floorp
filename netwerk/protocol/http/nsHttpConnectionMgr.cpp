@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "ConnectionHandle.h"
+#include "ETWTools.h"
 #include "HttpConnectionUDP.h"
 #include "NullHttpTransaction.h"
 #include "SpeculativeTransaction.h"
@@ -54,10 +55,24 @@ using namespace mozilla;
 
 namespace geckoprofiler::markers {
 
-struct UrlMarker {
-  static constexpr Span<const char> MarkerTypeName() {
-    return MakeStringSpan("Url");
-  }
+struct UrlMarker : public BaseMarkerType<UrlMarker> {
+  static constexpr const char* Name = "Url";
+  // "SpeculativeConnect", "DispatchTransaction" and "ProcessNewTransaction"
+  // only differ by their name.
+  static constexpr bool ETWStoreName = true;
+  using MS = MarkerSchema;
+  static constexpr MS::Location Locations[] = {
+      MS::Location::MarkerChart,
+      MS::Location::MarkerTable,
+  };
+  static constexpr MS::PayloadField PayloadFields[] = {
+      {"url", MS::InputType::CString, nullptr, MS::Format::Url},
+      {"duration", MS::InputType::TimeDuration, "Duration",
+       MS::Format::Duration},
+      // Bug 1618687 - Use channelId to segment "Waiting for Socket Thread".
+      {"channelId", MS::InputType::Uint64, nullptr, MS::Format::Integer},
+  };
+  static constexpr const char* TableLabel = "{marker.data.url}";
   static void StreamJSONMarkerData(
       mozilla::baseprofiler::SpliceableJSONWriter& aWriter,
       const mozilla::ProfilerString8View& aURL, const TimeDuration& aDuration,
@@ -70,15 +85,12 @@ struct UrlMarker {
     }
     aWriter.IntProperty("channelId", static_cast<int64_t>(aChannelId));
   }
-  static MarkerSchema MarkerTypeDisplay() {
-    using MS = MarkerSchema;
-    MS schema(MS::Location::MarkerChart, MS::Location::MarkerTable);
-    schema.SetTableLabel("{marker.data.url}");
-    schema.AddKeyFormat("url", MS::Format::Url);
-    schema.AddKeyLabelFormat("duration", "Duration", MS::Format::Duration);
-    // Bug 1618687 - Use channelId to segment "Waiting for Socket Thread".
-    schema.AddKeyFormat("channelId", MS::Format::Integer);
-    return schema;
+
+  // TODO: Remove once bug 2071910 is fixed.
+  static void TranslateMarkerInputToSchema(
+      void* aContext, const mozilla::ProfilerString8View& aURL,
+      const TimeDuration& aDuration, uint64_t aChannelId) {
+    ETW::OutputMarkerSchema(aContext, UrlMarker{}, aURL, aDuration, aChannelId);
   }
 };
 
@@ -481,7 +493,7 @@ nsresult nsHttpConnectionMgr::DoShiftReloadConnectionCleanupWithConnInfo(
     return NS_ERROR_INVALID_ARG;
   }
 
-  RefPtr<nsHttpConnectionInfo> ci = aCI->Clone();
+  RefPtr<nsHttpConnectionInfo> ci = aCI;
   return PostEvent(&nsHttpConnectionMgr::OnMsgDoShiftReloadConnectionCleanup, 0,
                    ci);
 }
@@ -492,7 +504,7 @@ nsresult nsHttpConnectionMgr::DoSingleConnectionCleanup(
     return NS_ERROR_INVALID_ARG;
   }
 
-  RefPtr<nsHttpConnectionInfo> ci = aCI->Clone();
+  RefPtr<nsHttpConnectionInfo> ci = aCI;
   return PostEvent(&nsHttpConnectionMgr::OnMsgDoSingleConnectionCleanup, 0, ci,
                    aPriority);
 }
@@ -676,7 +688,7 @@ nsresult nsHttpConnectionMgr::ProcessPendingQ(nsHttpConnectionInfo* aCI) {
   LOG(("nsHttpConnectionMgr::ProcessPendingQ [ci=%s]\n", aCI->HashKey().get()));
   RefPtr<nsHttpConnectionInfo> ci;
   if (aCI) {
-    ci = aCI->Clone();
+    ci = aCI;
   }
   return PostEvent(&nsHttpConnectionMgr::OnMsgProcessPendingQ, 0, ci);
 }
@@ -1048,6 +1060,61 @@ void nsHttpConnectionMgr::ReportSpdyConnection(nsHttpConnection* conn,
   }
 }
 
+already_AddRefed<ConnectionEntry>
+nsHttpConnectionMgr::HandOffHttp3OnlyConnection(HttpConnectionBase* aConn,
+                                                ConnectionEntry* aFromEnt) {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+  if (!aConn || !aConn->ConnectionInfo() || !aFromEnt) {
+    return nullptr;
+  }
+
+  RefPtr<HttpConnectionUDP> connUDP = do_QueryObject(aConn);
+  if (!connUDP) {
+    return nullptr;
+  }
+
+  RefPtr<nsHttpConnectionInfo> allowedCI =
+      aConn->ConnectionInfo()
+          ->Mutate()
+          .SetHttp3Policy(Http3Policy::Allowed)
+          .Finalize();
+
+  bool unused = false;
+  RefPtr<ConnectionEntry> originEnt =
+      GetOrCreateConnectionEntry(allowedCI, true, false, false, &unused);
+  if (!originEnt || originEnt == aFromEnt) {
+    return nullptr;
+  }
+
+  // The origin can already have its own h3 connection, because its Happy
+  // Eyeballs race runs an h3 leg too. Handing this one over would only add a
+  // second, which UpdateCoalescingForNewConn retires again straight away --
+  // after CloseIdleConnections() below has thrown away the entry's idle
+  // connections for nothing. Leave it here to be reclaimed instead. A merely
+  // in-flight h3 attempt is not a reason to bail: this connection is already
+  // established, and that attempt may still fail.
+  if (originEnt->HasUsableH3Connection()) {
+    LOG(
+        ("nsHttpConnectionMgr::HandOffHttp3OnlyConnection conn %p not handed "
+         "off, ent %p already has a usable h3 connection\n",
+         aConn, originEnt.get()));
+    return nullptr;
+  }
+
+  LOG(
+      ("nsHttpConnectionMgr::HandOffHttp3OnlyConnection conn %p from ent %p to "
+       "ent %p, CI %s -> %s\n",
+       aConn, aFromEnt, originEnt.get(),
+       aConn->ConnectionInfo()->HashKey().get(), allowedCI->HashKey().get()));
+
+  aFromEnt->MoveConnection(aConn, originEnt);
+  connUDP->RekeyAfterHttp3OnlyHandOff(allowedCI);
+
+  originEnt->CloseIdleConnections();
+
+  return originEnt.forget();
+}
+
 void nsHttpConnectionMgr::ReportHttp3Connection(HttpConnectionBase* conn,
                                                 ConnectionEntry* entry) {
   LOG(("nsHttpConnectionMgr::ReportHttp3Connection conn=%p", conn));
@@ -1414,6 +1481,20 @@ nsresult nsHttpConnectionMgr::MakeNewConnection(
   // because we have already determined there are no idle connections
   // to our destination
 
+  if (mNumIdleConns + mNumActiveConns + 1 >= mMaxConns &&
+      profiler_thread_is_being_profiled_for_markers()) {
+    // The marker payload has no 16-bit integer format.
+    uint32_t active = mNumActiveConns;
+    uint32_t idle = mNumIdleConns;
+    uint32_t maxConns = mMaxConns;
+    nsCString origin(ent->mConnInfo->GetOrigin());
+    PROFILER_MARKER_SIMPLE_PAYLOAD_WITH_LABEL(
+        "HttpConnectionLimit", NETWORK,
+        "active={marker.data.active} idle={marker.data.idle} "
+        "max={marker.data.maxConns} for {marker.data.origin}",
+        active, idle, maxConns, origin);
+  }
+
   if ((mNumIdleConns + mNumActiveConns + 1 >= mMaxConns) && mNumIdleConns) {
     // If the global number of connections is preventing the opening of new
     // connections to a host without idle connections, then close them
@@ -1421,6 +1502,12 @@ nsresult nsHttpConnectionMgr::MakeNewConnection(
     auto iter = mCT.ConstIter();
     while (mNumIdleConns + mNumActiveConns + 1 >= mMaxConns && !iter.Done()) {
       RefPtr<ConnectionEntry> entry = iter.Data();
+      // Losing the TRR connection stalls every pending DNS lookup until it is
+      // rebuilt, so it is not worth the connection slot it frees.
+      if (entry->mConnInfo->GetIsTrrServiceChannel()) {
+        iter.Next();
+        continue;
+      }
       entry->CloseIdleConnections((mNumIdleConns + mNumActiveConns + 1) -
                                   mMaxConns);
       iter.Next();
@@ -1433,6 +1520,9 @@ nsresult nsHttpConnectionMgr::MakeNewConnection(
     // connections to a host without idle connections, then close any spdy
     // ASAP.
     for (const RefPtr<ConnectionEntry>& entry : mCT.Values()) {
+      if (entry->mConnInfo->GetIsTrrServiceChannel()) {
+        continue;
+      }
       while (entry->MakeFirstActiveSpdyConnDontReuse()) {
         // Stop on <= (particularly =) because this dontreuse
         // causes async close.
@@ -2010,9 +2100,8 @@ nsresult nsHttpConnectionMgr::ProcessNewTransaction(nsHttpTransaction* trans) {
       ConnectionEntry* specificEnt = mCT.GetWeak(ci->HashKey());
 
       if (!specificEnt) {
-        RefPtr<nsHttpConnectionInfo> clone(ci->Clone());
-        specificEnt = new ConnectionEntry(clone, mPendingQEntries);
-        mCT.InsertOrUpdate(clone->HashKey(), RefPtr{specificEnt});
+        specificEnt = new ConnectionEntry(ci, mPendingQEntries);
+        mCT.InsertOrUpdate(ci->HashKey(), RefPtr{specificEnt});
       }
 
       ent = specificEnt;
@@ -3667,9 +3756,8 @@ ConnectionEntry* nsHttpConnectionMgr::GetOrCreateConnectionEntry(
   // step 3
   LOG(("GetOrCreateConnectionEntry step 3"));
   if (!specificEnt) {
-    RefPtr<nsHttpConnectionInfo> clone(specificCI->Clone());
-    specificEnt = new ConnectionEntry(clone, mPendingQEntries);
-    mCT.InsertOrUpdate(clone->HashKey(), RefPtr{specificEnt});
+    specificEnt = new ConnectionEntry(specificCI, mPendingQEntries);
+    mCT.InsertOrUpdate(specificCI->HashKey(), RefPtr{specificEnt});
   }
   return specificEnt;
 }
@@ -3745,12 +3833,27 @@ void nsHttpConnectionMgr::DoSpeculativeConnectionInternal(
           ("DoSpeculativeConnectionInternal Transport socket creation "
            "failure: %" PRIx32 "\n",
            static_cast<uint32_t>(rv)));
+      // Nothing will complete this transaction now, so release whoever is
+      // waiting on it. See the fallback comment below.
+      if (aTrans->IsForFallback()) {
+        aTrans->InvokeCallback();
+      }
     }
   } else {
     LOG(
         ("DoSpeculativeConnectionInternal Transport ci=%s "
          "not created due to existing connection count:%d",
          aEnt->mConnInfo->HashKey().get(), parallelSpeculativeConnectLimit));
+    // An ordinary speculative connection is only a warm-up and can be skipped,
+    // but a fallback transaction has a real transaction waiting on its
+    // callback to move off a connection that may never come up (e.g. HTTP/3 to
+    // an endpoint that blackholes QUIC). Dropping the callback would leave that
+    // transaction stalled until the HTTP/3 connection times out, so let it fall
+    // back anyway; it will get a connection from the fallback entry through the
+    // regular dispatch path once one is free.
+    if (aTrans->IsForFallback()) {
+      aTrans->InvokeCallback();
+    }
   }
 }
 
@@ -4049,7 +4152,7 @@ class nsStoreServerCertHashesData : public ARefBase {
 nsresult nsHttpConnectionMgr::StoreServerCertHashes(
     nsHttpConnectionInfo* aConnInfo, bool aNoSpdy, bool aNoHttp3,
     nsTArray<RefPtr<nsIWebTransportHash>>&& aServerCertHashes) {
-  RefPtr<nsHttpConnectionInfo> ci = aConnInfo->Clone();
+  RefPtr<nsHttpConnectionInfo> ci = aConnInfo;
   RefPtr<nsStoreServerCertHashesData> data = new nsStoreServerCertHashesData(
       ci, aNoSpdy, aNoHttp3, std::move(aServerCertHashes));
   return PostEvent(&nsHttpConnectionMgr::OnMsgStoreServerCertHashes, 0, data);
