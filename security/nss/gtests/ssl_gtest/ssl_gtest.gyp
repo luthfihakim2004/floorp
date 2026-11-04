@@ -13,6 +13,7 @@
       'sources': [
         'bloomfilter_unittest.cc',
         'libssl_internals.c',
+        '<(DEPTH)/gtests/common/pk11_import.cc',
         'selfencrypt_unittest.cc',
         'ssl_0rtt_unittest.cc',
         'ssl_aead_unittest.cc',
@@ -101,11 +102,6 @@
         [ 'disable_dbm==0', {
           'dependencies': [
             '<(DEPTH)/lib/dbm/src/src.gyp:dbm',
-          ],
-        }],
-        [ 'disable_kyber==0', {
-          'sources': [
-             'tls_xyber_unittest.cc',
           ],
         }],
         [ 'enable_sslkeylogfile==1 and sanitizer_flags==0', {

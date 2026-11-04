@@ -507,6 +507,7 @@ let JSWINDOWACTORS = {
       "moz-extension://*",
       "data:text/html,*",
       "about:reader?*",
+      "about:smartpage?*",
     ],
     messageManagerGroups: ["browsers", "headless-browsers"],
     safeForUntrustedWebProcess: true,
@@ -704,8 +705,8 @@ if (!Services.prefs.getBoolPref("browser.pagedata.enabled", false)) {
 }
 
 if (AppConstants.platform != "android") {
-  // The stream converter sends this actor's message from the scriptless
-  // object/embed fallback page; no child module is needed.
+  // The stream converter sends this message from the scriptless fallback page,
+  // so no child module is needed.
   JSWINDOWACTORS.PdfEmbedFallback = {
     parent: {
       esModuleURI: "resource://pdf.js/PdfEmbedFallbackParent.sys.mjs",

@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.NotificationManagerCompat
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
 import mozilla.components.browser.engine.gecko.util.EngineDownloadDelegate
 import mozilla.components.browser.icons.BrowserIcons
 import mozilla.components.browser.state.engine.EngineMiddleware
@@ -43,6 +44,7 @@ import mozilla.components.feature.search.middleware.AdsTelemetryMiddleware
 import mozilla.components.feature.search.middleware.SearchMiddleware
 import mozilla.components.feature.search.region.RegionMiddleware
 import mozilla.components.feature.search.storage.SearchEngineSelectorConfig
+import mozilla.components.feature.search.telemetry.SerpTelemetryRepository
 import mozilla.components.feature.search.telemetry.ads.AdsTelemetry
 import mozilla.components.feature.search.telemetry.incontent.InContentTelemetry
 import mozilla.components.feature.session.SessionUseCases
@@ -108,6 +110,13 @@ class Components(
     context: Context,
     private val engineOverride: Engine? = null,
     private val clientOverride: Client? = null,
+    /**
+     * A [CoroutineScope] tied to the lifetime of the application process.
+     *
+     * Note: Tasks should be scoped to the container which holds their UI. If necessary, applicationScope can be used
+     * for top-level background work that must remain active for the whole duration of the application.
+     */
+    @Suppress("UnusedPrivateProperty") val applicationScope: CoroutineScope,
 ) {
     val appStore: AppStore by lazy {
         AppStore(
@@ -134,7 +143,19 @@ class Components(
     val settings by lazy { Settings(context) }
 
     val fileUploadsDirCleaner: FileUploadsDirCleaner by lazy {
-        FileUploadsDirCleaner { context.cacheDir }
+        FileUploadsDirCleaner(applicationScope) { context.cacheDir }
+    }
+
+    /**
+     * Retained so that its [mozilla.appservices.remotesettings.RemoteSettingsClient] stays reachable for the lifetime
+     * of the process. application-services only holds a weak reference to each client and skips collections whose
+     * client has been collected, so a short-lived repository would opt `search-telemetry-v2` out of syncing entirely.
+     */
+    val serpTelemetryRepository by lazy {
+        SerpTelemetryRepository(
+            collectionName = GleanMetricsService.COLLECTION_NAME,
+            remoteSettingsService = remoteSettingsService,
+        )
     }
 
     val remoteSettingsSyncScheduler by lazy {
@@ -205,7 +226,7 @@ class Components(
                         // We are currently using the default location service. We should consider using
                         // an actual implementation:
                         // https://github.com/mozilla-mobile/focus-android/issues/4781
-                        RegionMiddleware(context, locationService),
+                        RegionMiddleware(context, locationService, applicationScope = applicationScope),
                         SearchMiddleware(
                             context,
                             migration = SearchMigration(context),

@@ -14,6 +14,10 @@ const { XPCOMUtils } = ChromeUtils.importESModule(
   "resource://gre/modules/XPCOMUtils.sys.mjs"
 );
 
+/**
+ * @import { PopupAndRedirectBlocker } from "moz-src:///toolkit/actors/PopupAndRedirectBlockingParent.sys.mjs";
+ */
+
 let lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -94,6 +98,21 @@ window.addEventListener(
  * @implements {nsIBrowser}
  */
 export class MozBrowser extends MozElements.MozElementMixin(XULFrameElement) {
+  /**
+   * The URI the tabbrowser has registered with UrlbarProviderOpenTabs.
+   *
+   * @type {nsIURI}
+   */
+  registeredOpenURI;
+
+  /**
+   * The device sharing state, set by the WebRTC parent actor and read by the
+   * tabbrowser and the site permission panel.
+   *
+   * @type {any}
+   */
+  _sharingState;
+
   static get observedAttributes() {
     return ["remote"];
   }
@@ -124,7 +143,13 @@ export class MozBrowser extends MozElements.MozElementMixin(XULFrameElement) {
     this.droppedLinkHandler = null;
     this.mIconURL = null;
     this.lastURI = null;
+    /** @type {number} */
+    this.lastLocationChange;
 
+    /**
+     * @type {PopupAndRedirectBlocker}
+     */
+    this.popupAndRedirectBlocker;
     ChromeUtils.defineLazyGetter(this, "popupAndRedirectBlocker", () => {
       return new lazy.PopupAndRedirectBlocker(this);
     });
@@ -1838,7 +1863,7 @@ export class MozBrowser extends MozElements.MozElementMixin(XULFrameElement) {
   async drawSnapshot(x, y, w, h, scale, backgroundColor, fullViewport = false) {
     let rect = fullViewport ? null : new DOMRect(x, y, w, h);
     try {
-      return this.browsingContext.currentWindowGlobal.drawSnapshot(
+      return await this.browsingContext.currentWindowGlobal.drawSnapshot(
         rect,
         scale,
         backgroundColor

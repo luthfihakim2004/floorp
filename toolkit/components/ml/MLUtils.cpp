@@ -95,14 +95,10 @@ NS_IMETHODIMP MLUtils::GetOptimalCPUConcurrency(uint8_t* _retval) {
 }
 
 NS_IMETHODIMP MLUtils::CanUseLlamaCpp(bool* _retval) {
-#ifdef MOZ_NATIVE_LLAMA
-#  ifdef __x86_64__
+#ifdef __x86_64__
   *_retval = mozilla::supports_avx2();
-#  elif defined(__aarch64__)
+#elif defined(__aarch64__)
   *_retval = true;
-#  else
-  *_retval = false;
-#  endif
 #else
   *_retval = false;
 #endif

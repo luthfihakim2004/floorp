@@ -155,6 +155,32 @@ add_task(async function testQueryParamIsStrippedWhenParamIsLowercase() {
   });
 });
 
+// Bug 1960853 - Tests
+
+// Ensuring a valueless param does not gain a wrong '=' --> bug id = 1960853
+add_task(async function testEqualsSignNotAddedToValuelessParam() {
+  let originalUrl = "https://www.example.com/?utm_ad=test&x";
+  let shortenedUrl = "https://www.example.com/?x";
+  await testMenuItemEnabled({
+    validUrl: originalUrl,
+    strippedUrl: shortenedUrl,
+    useTestList: true,
+    expectedDisabled: false,
+  });
+});
+
+// A genuinely empty value (trailing '=') must be preserved
+add_task(async function testGenuineEmptyValuePreserved() {
+  let originalUrl = "https://www.example.com/?utm_ad=test&x=";
+  let shortenedUrl = "https://www.example.com/?x=";
+  await testMenuItemEnabled({
+    validUrl: originalUrl,
+    strippedUrl: shortenedUrl,
+    useTestList: true,
+    expectedDisabled: false,
+  });
+});
+
 /**
  * Opens a new tab and checks menu item is hidden in the url bar context menu.
  *
@@ -179,14 +205,12 @@ async function testMenuItemDisabled({ url, prefEnabled, selection }) {
       // The `withContextMenu` call below, synthesises the `contextmenu` event,
       // however it doesn't synthesise the `mousedown`. This would mean that
       // `UrlbarInput.#preventClickSelectsAll` would never be set, to prevent
-      // selecting all the on right click. Hence we trigger the `mousedown` here
-      // to ensure that is set, and not select all when right-clicking.
+      // selecting all the on right click. Hence we synthesize the `mousedown`
+      // and `mouseup` of the right click here to ensure that is set, and not
+      // select all when right-clicking.
       EventUtils.synthesizeMouseAtCenter(
         window.gURLBar.inputField,
-        {
-          type: "mousedown",
-          button: 2,
-        },
+        { button: 2 },
         window
       );
     }
@@ -232,11 +256,11 @@ async function testMenuItemEnabled({
       },
       example: {
         queryParams: ["test_2", "test_1", "TEST_5"],
-        origins: ["www.example.com"],
+        hosts: ["www.example.com"],
       },
       exampleNet: {
         queryParams: ["test_3", "test_4"],
-        origins: ["www.example.net"],
+        hosts: ["www.example.net"],
       },
     };
 

@@ -9,12 +9,14 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import mozilla.components.ExperimentalAndroidComponentsApi
 import mozilla.components.concept.engine.Engine
+import mozilla.components.concept.engine.ipprotection.ServiceState
 import mozilla.components.feature.ipprotection.store.IPProtectionAction
 import mozilla.components.feature.ipprotection.store.IPProtectionStore
 import mozilla.components.feature.ipprotection.store.InternalAction
 import mozilla.components.feature.ipprotection.store.state.AccountStatus
 import mozilla.components.feature.ipprotection.store.state.EligibilityStatus
 import mozilla.components.feature.ipprotection.store.state.PendingActivationRequest
+import mozilla.components.feature.ipprotection.store.state.isActivationInFlight
 import mozilla.components.service.fxa.manager.FxaAccountManager
 import mozilla.components.support.test.any
 import mozilla.components.support.test.mock
@@ -48,6 +50,26 @@ class IPProtectionFeatureTest {
                 handler.calls.filter {
                     it is FakeIPProtectionHandler.Call.NotifyAccountStatus || it is FakeIPProtectionHandler.Call.Enroll
                 },
+            )
+        }
+
+    @Test
+    fun `GIVEN the account manager reports Authenticated before WarmingUp WHEN the service starts unauthenticated THEN it is told the user is signed in`() =
+        runTest(testDispatcher) {
+            val (store, _) = buildStore(buildIPProtectionState(accountStatus = AccountStatus.Uninitialized))
+            val handler = startFeature(store)
+
+            store.dispatch(InternalAction.AccountManagerStateChanged(AccountStatus.Authenticated))
+            store.dispatch(InternalAction.AccountManagerStateChanged(AccountStatus.WarmingUp))
+            testScheduler.advanceUntilIdle()
+            store.dispatch(IPProtectionAction.EligibilityChanged(EligibilityStatus.Eligible))
+            testScheduler.advanceUntilIdle()
+            store.dispatch(IPProtectionAction.ServiceStateChanged(ServiceState.Unauthenticated))
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(
+                listOf(FakeIPProtectionHandler.Call.NotifyAccountStatus(true)),
+                handler.calls.filterIsInstance<FakeIPProtectionHandler.Call.NotifyAccountStatus>(),
             )
         }
 
@@ -96,6 +118,24 @@ class IPProtectionFeatureTest {
 
             middleware.assertFirstAction(IPProtectionAction.ToggleFailed::class)
             middleware.assertNotDispatched(IPProtectionAction.LocationSwitchFailed::class)
+        }
+
+    @Test
+    fun `GIVEN a location switch WHEN the engine accepts it without a state change THEN the request is retired`() =
+        runTest(testDispatcher) {
+            // The engine reports nothing when only the country changes, so nothing else clears the request.
+            val request = PendingActivationRequest.Activate("JP", isLocationSwitch = true)
+            val (store, _) =
+                buildStore(
+                    buildIPProtectionState(eligibilityStatus = EligibilityStatus.Eligible)
+                        .copy(pendingActivationRequest = request)
+                )
+
+            startFeature(store)
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(null, store.state.pendingActivationRequest)
+            assertEquals(false, store.state.isActivationInFlight)
         }
 
     private fun TestScope.startFeature(store: IPProtectionStore, failing: Boolean = false): FakeIPProtectionHandler {

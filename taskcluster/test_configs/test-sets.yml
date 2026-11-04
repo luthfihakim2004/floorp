@@ -109,6 +109,7 @@ browsertime:
     - browsertime-benchmark-wasm
     - browsertime-youtube-playback
     - browsertime-youtube-playback-power
+    - browsertime-media-playback
     - browsertime-media-seek
     - browsertime-custom
     - browsertime-first-install
@@ -126,6 +127,7 @@ browsertime:
     - browsertime-webcodecs
     - browsertime-trr-performance
     - browsertime-hev3-connection
+    - browsertime-doh-busy-site
 
 browsertime-clang:
     - browsertime-tp6
@@ -160,6 +162,13 @@ awsy:
     - awsy-base
     - awsy-dmd
     - awsy-base-dmd
+    - awsy-tp6
+
+# Pageload AWSY tests for the macOS tart VMs. The base tests stay on hardware
+# for now, as their results were less stable on the VMs (Bug 2045799).
+awsy-pageload:
+    - awsy
+    - awsy-dmd
     - awsy-tp6
 
 ccov-code-coverage-tests:
@@ -206,6 +215,7 @@ linux-tests:
     - mochitest-chrome-gpu
     - mochitest-devtools-chrome
     - mochitest-media
+    - mochitest-speech-recognition
     - mochitest-plain
     - mochitest-plain-gpu
     - mochitest-remote
@@ -238,6 +248,7 @@ linux-2404-tsan-tests:
     - mochitest-chrome-gpu
     - mochitest-devtools-chrome
     - mochitest-media
+    - mochitest-speech-recognition
     - mochitest-plain
     - mochitest-plain-gpu
     - mochitest-remote
@@ -278,6 +289,7 @@ linux2204-wayland-tests:
     - mochitest-chrome-gpu
     - mochitest-devtools-chrome
     - mochitest-media
+    - mochitest-speech-recognition
     - mochitest-plain
     - mochitest-plain-gpu
     - mochitest-remote
@@ -358,6 +370,7 @@ windows11-25h2-tests:
     - mochitest-chrome-gpu
     - mochitest-devtools-chrome
     - mochitest-media
+    - mochitest-speech-recognition
     - mochitest-plain
     - mochitest-plain-gpu
     - mochitest-remote
@@ -436,9 +449,6 @@ talos-xperf:
     - talos-xperf
 
 # macOS
-macosx1500-64-jittests:
-    - jittest
-
 macosx1500-64-tests:
     - cppunittest
     - crashtest
@@ -456,6 +466,7 @@ macosx1500-64-tests:
     - mochitest-chrome-gpu
     - mochitest-devtools-chrome
     - mochitest-media
+    - mochitest-speech-recognition
     - mochitest-plain
     - mochitest-plain-gpu
     - mochitest-remote
@@ -485,8 +496,6 @@ macosx1500-aarch64-tests:
     - jsreftest
     - marionette-integration
     - marionette-unittest
-    - crashtest
-    - jittest
     - mochitest-a11y
     - mochitest-browser-a11y
     - mochitest-browser-chrome
@@ -496,6 +505,7 @@ macosx1500-aarch64-tests:
     - mochitest-chrome-gpu
     - mochitest-devtools-chrome
     - mochitest-media
+    - mochitest-speech-recognition
     - mochitest-plain
     - mochitest-plain-gpu
     - mochitest-remote
@@ -543,7 +553,6 @@ macosx1470-64-tests:
     - cppunittest
 
 macosx1015-64-qr-tests:
-    - cppunittest
     - crashtest
     - jittest
     - mochitest-media
@@ -580,6 +589,9 @@ macosx1500-64-perftests:
     - browsertime-nav-bench
     - browsertime-tp6-essential
 
+macosx2700-aarch64-perftests:
+    - browsertime-benchmark
+
 # Android
 
 android14-x86_64-tests:
@@ -604,6 +616,10 @@ android14-x86_64-tests:
     - web-platform-tests-eme
     - web-platform-tests-webrtc
     - xpcshell
+
+android14-x86_64-appservices-tests:
+    - cppunittest
+    - gtest
 
 android-hw-aarch64-opt-unittests:
     - jittest
@@ -643,6 +659,7 @@ android-hw-browsertime:
     - browsertime-youtube-playback-power-mobile
     - browsertime-trr-performance-m
     - browsertime-hev3-connection-m
+    - browsertime-doh-busy-site-m
 
 android-hw-browsertime-profiling:
     - browsertime-tp6m-profiling
@@ -651,7 +668,14 @@ android-hw-speedometer-tests:
     - browsertime-benchmark-speedometer2-mobile
     - browsertime-benchmark-speedometer3-mobile
 
-android-em-arm64-speedometer-tests:
+android-hw-doh-tests:
+    - browsertime-doh-busy-site-m
+
+android-em-arm64-benchmark-tests:
+    - browsertime-benchmark-speedometer3-mobile
+    - browsertime-benchmark-jetstream3
+
+android-hw-speedometer3-nightlyasrelease:
     - browsertime-benchmark-speedometer3-mobile
 
 android-hw-power-tests:

@@ -38,7 +38,7 @@ AudioSink::AudioSink(AbstractThread* aThread,
     : mOwnerThread(aThread),
       mOutputRate(
           DecideAudioPlaybackSampleRate(aInfo, aShouldResistFingerprinting)),
-      mOutputChannels(DecideAudioPlaybackChannels(aInfo)),
+      mOutputChannels(AudioPlaybackChannels(aInfo)),
       mAudibilityMonitor(
           mOutputRate,
           StaticPrefs::dom_media_silence_duration_for_audibility()),
@@ -164,6 +164,7 @@ void AudioSink::ApplyPlaybackParams(const PlaybackParams& aParams) {
   mAudioStream->SetVolume(aParams.mVolume);
   mAudioStream->SetPlaybackRate(aParams.mPlaybackRate);
   mAudioStream->SetPreservesPitch(aParams.mPreservesPitch);
+  mAudioStream->SetStreamName(aParams.mStreamName);
 }
 
 void AudioSink::ConnectAudioQueues() {
@@ -336,6 +337,11 @@ RefPtr<MediaSink::EndedPromise> AudioSink::ResetForReuse(
              "Nothing may be pushed while the sink is stopped for a seek");
   SINK_LOG("ResetForReuse to start time {}", aStartTime.ToMicroseconds());
 
+  // This is safe because the sink is shut down, and all event listeners that
+  // push to this queue are disconnected at this time and nobody can be writing
+  // to it.
+  mProcessedSPSCQueue->ResetProducerThreadId();
+
   ApplyPlaybackParams(aParams);
 
   // Re-establish the same initial playback accounting as a freshly constructed
@@ -351,9 +357,12 @@ RefPtr<MediaSink::EndedPromise> AudioSink::ResetForReuse(
   mLastProcessedPacket = Nothing();
   mConverter = nullptr;
 
-  // Resuming into a playing state; bring the stream's logical state back in
-  // sync with the sink.
   mAudioStream->Resume();
+
+  // Must precede ConnectAudioQueues() and NotifyAudioNeeded(); see
+  // AudioClock::Rebase.
+  mAudioStream->RebaseLive();
+
   ConnectAudioQueues();
 
   // Ensure at least one post-seek packet is converted and ready to play.
@@ -361,9 +370,6 @@ RefPtr<MediaSink::EndedPromise> AudioSink::ResetForReuse(
 
   mStoppedForSeek = false;
 
-  // The stream was never stopped, so there is no cubeb_stream_start; rebase the
-  // still-running clock and re-arm the ended promise for the reused stream.
-  mAudioStream->RebaseLive();
   return mAudioStream->ReinitEndedPromise();
 }
 
@@ -462,7 +468,7 @@ uint32_t AudioSink::PopFrames(AudioDataValue* aBuffer, uint32_t aFrames,
     } else if (IsIntentionallySilent()) {
       SINK_LOG_V("Stopped for a seek, outputting silence.");
     } else {
-      NS_WARNING("Underrun when popping samples from audiosink ring buffer.");
+      SINK_LOG("Underrun when popping samples from audiosink ring buffer.");
       TRACE_COMMENT("AudioSink::PopFrames", "Underrun %u frames missing",
                     SampleToFrame(samplesToPop - samplesRead));
     }

@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this,
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import annotations
+
 import json
 import re
 import string
@@ -120,6 +122,10 @@ class JujutsuRepository(Repository):
     def head_rev(self):
         return self._resolve_to_commit(self.HEAD_REVSET)
 
+    @property
+    def is_shallow(self):
+        return self._git.is_shallow
+
     def is_cinnabar_repo(self) -> bool:
         return self._git.is_cinnabar_repo()
 
@@ -153,7 +159,9 @@ class JujutsuRepository(Repository):
             "--revisions",
             self.HEAD_REVSET,
             "--template",
-            'local_bookmarks.join("\n")',
+            # Use name() rather than the default RefName formatting, which
+            # decorates diverged ("*") and conflicted ("??") bookmarks.
+            'local_bookmarks.map(|b| b.name()).join("\n")',
         )
         bookmark = output.split("\n")[0].strip()
         return bookmark or None
@@ -658,13 +666,18 @@ class JujutsuRepository(Repository):
             return True
         return False
 
-    def configure(self, state_dir: Path, update_only: bool = False):
+    def configure(
+        self,
+        state_dir: Path,
+        update_only: bool = False,
+        no_system_changes: bool = False,
+    ):
         """Run the Jujutsu configuration steps."""
         print(
             "\nOur jj support currently relies on Git; checks will run for both jj and Git.\n"
         )
 
-        self._git.configure(state_dir, update_only)
+        self._git.configure(state_dir, update_only, no_system_changes=no_system_changes)
 
         topsrcdir = Path(self.path)
         if not update_only:

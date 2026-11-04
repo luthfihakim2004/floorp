@@ -18,6 +18,7 @@
 #include "mozilla/Mutex.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/Result.h"
+#include "mozilla/StaticString.h"
 #include "mozilla/ThreadBound.h"
 #include "mozilla/dom/Nullable.h"
 #include "mozilla/dom/UnboundedMPSCQueue.h"
@@ -53,6 +54,13 @@ class nsIFile;
 class nsIRunnable;
 class nsIThread;
 class nsITimer;
+
+namespace mozilla::dom::quota {
+class CipherKeyStoreBackend;
+template <typename CipherStrategy>
+class CipherKeyManager;
+struct NSSCipherStrategy;
+}  // namespace mozilla::dom::quota
 
 namespace mozilla {
 
@@ -388,8 +396,7 @@ class QuotaManager final : public BackgroundThreadObject {
 
   // Collect inactive and the least recently used origins.
   uint64_t CollectOriginsForEviction(
-      uint64_t aMinSizeToBeFreed,
-      nsTArray<RefPtr<OriginDirectoryLock>>& aLocks);
+      int64_t aMinSizeToBeFreed, nsTArray<RefPtr<OriginDirectoryLock>>& aLocks);
 
   /**
    * Helper method to invoke the provided predicate on all "pending" OriginInfo
@@ -715,13 +722,16 @@ class QuotaManager final : public BackgroundThreadObject {
 
   void SetThumbnailPrivateIdentityId(uint32_t aThumbnailPrivateIdentityId);
 
-  uint64_t GetGroupLimit() const;
-  static uint64_t GetGroupLimitForLimit(uint64_t aLimit);
+  int64_t GetGroupLimit() const;
+  static int64_t GetGroupLimitForLimit(int64_t aLimit);
 
   Maybe<OriginStateMetadata> GetOriginStateMetadata(
       const OriginMetadata& aOriginMetadata);
 
   std::pair<uint64_t, uint64_t> GetUsageAndLimitForEstimate(
+      const OriginMetadata& aOriginMetadata);
+
+  std::pair<uint64_t, uint64_t> GetGroupUsageAndLimitForEstimate(
       const OriginMetadata& aOriginMetadata);
 
   uint64_t GetOriginUsage(const PrincipalMetadata& aPrincipalMetadata);
@@ -807,6 +817,14 @@ class QuotaManager final : public BackgroundThreadObject {
   OriginMetadataArray GetTemporaryOrigins(
       PersistenceType aPersistenceType) const;
 
+  Result<RefPtr<CipherKeyManager<NSSCipherStrategy>>, nsresult>
+  GetOrCreateCipherKeyManager(const nsACString& aOrigin,
+                              Client::Type aClientType);
+
+  bool IsStorageEncryptionEnabled() const { return mStorageEncryptionEnabled; }
+
+  bool IsOriginEncrypted(const OriginMetadata& aOriginMetadata);
+
  private:
   virtual ~QuotaManager();
 
@@ -829,6 +847,10 @@ class QuotaManager final : public BackgroundThreadObject {
   void LockedRemoveQuotaForRepository(PersistenceType aPersistenceType);
 
   void LockedRemoveQuotaForOrigin(const OriginMetadata& aOriginMetadata);
+
+  // Records the quotamanager.temporary_storage_usage_underflow event if
+  // mTemporaryStorageUsage is negative.
+  void LockedMaybeRecordTemporaryStorageUsageUnderflow(StaticString aCallSite);
 
   bool LockedHasGroupInfoPair(const nsACString& aGroup) const;
 
@@ -1291,6 +1313,9 @@ class QuotaManager final : public BackgroundThreadObject {
   // sense. See bug 1585978 for details.
   int64_t mTemporaryStorageLimit;
   int64_t mTemporaryStorageUsage;
+  // How many times a negative mTemporaryStorageUsage was seen. Used to
+  // throttle temporary_storage_usage_underflow telemetry events.
+  uint32_t mTemporaryStorageUsageUnderflowCount = 0;
 
   int64_t mNextDirectoryLockId;
   bool mStorageInitialized;
@@ -1303,6 +1328,9 @@ class QuotaManager final : public BackgroundThreadObject {
   bool mCacheUsable;
   bool mCacheRequiresFullScan;
   std::atomic<bool> mUsageModificationDisabled{false};
+  bool mStorageEncryptionEnabled = false;
+
+  RefPtr<CipherKeyStoreBackend> mCipherKeyStore;
 };
 
 }  // namespace mozilla::dom::quota

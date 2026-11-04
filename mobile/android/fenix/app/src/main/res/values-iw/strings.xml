@@ -77,7 +77,11 @@
   <string name="about_content" tools:ignore="BrandUsage">‏%1$s נוצר על־ידי Mozilla.</string>
   <!-- Private Browsing -->
   <string name="private_browsing_common_myths">מיתוסים נפוצים על גלישה פרטית</string>
-  <!-- Text to be announced by the accessibility service to inform the user that the private browsing mode is currently active. -->
+  <!--
+    Private Browsing
+
+    Text to be announced by the accessibility service to inform the user that the private browsing mode is currently active.
+  -->
   <string name="private_browsing_a11y_session_announcement">הפעלה בגלישה פרטית</string>
   <!--
     True Private Browsing Mode
@@ -181,8 +185,10 @@
   <!--
     Browser Fragment
 
-    Content description (not visible, for screen readers etc.): Navigate backward (browsing history)
+    Label for popup button that appears when long-pressing the main menu. Tapping it allows the user to customize the main menu layout.
   -->
+  <string name="customize_menu">התאמה אישית של התפריט</string>
+  <!-- Content description (not visible, for screen readers etc.): Navigate backward (browsing history) -->
   <string name="browser_menu_back">חזרה</string>
   <!-- Content description (not visible, for screen readers etc.): Navigate forward (browsing history) -->
   <string name="browser_menu_forward">קדימה</string>
@@ -209,6 +215,10 @@
   <string name="browser_menu_no_extensions_installed_description">אין הרחבות פעילות</string>
   <!-- The description of the browser menu appears when the user hasn't installed any extensions and there are recommended extensions. -->
   <string name="browser_menu_try_a_recommended_extension_description">נסו הרחבה מומלצת</string>
+  <!-- In the browser menu: Message under the Extensions menu item, displayed when one or more extensions have updates that require approving changes to their permission settings. %1$s is a comma-separated list of one or more extension names. -->
+  <string name="browser_menu_extensions_review_update_description">סקירת עדכון עבור %1$s</string>
+  <!-- In the browser menu: Message under an extension name, displayed when the update requires approving changes to extension settings. -->
+  <string name="browser_menu_extension_review_update_description">יש לסקור את ההגדרות כדי לעדכן</string>
   <!-- Browser menu button that opens account settings -->
   <string name="browser_menu_account_settings">מידע על החשבון</string>
   <!-- Browser menu button that opens the settings menu -->
@@ -273,6 +283,10 @@
   <string name="browser_main_menu_content_description_navigation_header">ניווט</string>
   <!-- Content description (not visible, for screen readers etc.) for bottom sheet handlebar custom tab menu. -->
   <string name="browser_custom_tab_menu_handlebar_content_description">סגירת גיליון תפריט לשונית מותאמת אישית</string>
+  <!-- URL bar indicator shown on a cached version of the website, when the tab is reloading, but the content is not live yet -->
+  <string name="browser_toolbar_cached_page_indicator">במטמון</string>
+  <!-- Message shown when a cached website has finished reloading and the tab is now showing the live version of the page -->
+  <string name="browser_toolbar_live_page_toast">דף עדכני</string>
   <!-- Browser menu label that bookmarks the currently visited page -->
   <string name="browser_menu_bookmark_this_page_2">הוספת העמוד לסימניות</string>
   <!-- Browser menu label that navigates to the edit bookmark screen for the current bookmarked page -->
@@ -287,8 +301,12 @@
   <string name="browser_menu_summarize_page">סיכום העמוד</string>
   <!-- Browser menu badge text for summarization feature -->
   <string name="browser_menu_summarize_page_badge">חדש</string>
+  <!-- Browser menu badge text for new, highlighted feature -->
+  <string name="browser_menu_page_badge_text">חדש</string>
   <!-- Browser menu label for navigating to the Web Compat Reporter feature, which provides users the ability to send bug reports for broken sites. -->
   <string name="browser_menu_webcompat_reporter_2">דיווח על אתר שבור</string>
+  <!-- Browser menu label for adding a tab to a tab group -->
+  <string name="browser_menu_add_to_tab_group">הוספה לקבוצה</string>
   <!-- Browser menu label that is displayed when the current page has been translated by the translation feature. -->
   <string name="browser_menu_translated">מתורגם</string>
   <!-- Browser menu label for the print feature -->
@@ -305,8 +323,6 @@
   <string name="browser_menu_default_banner_title">הגדרת %1$s כברירת המחדל</string>
   <!-- Label text within the set as default banner -->
   <string name="browser_menu_default_banner_subtitle_2">מהיר, פרטי ונוצר עבורך.</string>
-  <!-- Content description (not visible, for screen readers etc.) for the button that dismisses the set as default banner in the menu -->
-  <string name="browser_menu_default_banner_dismiss_promotion">סגירת ההצעה</string>
   <!-- Content description (not visible, for screen readers etc.) for recommended extensions in main menu -->
   <string name="browser_menu_recommended_extensions_content_description">מידע נוסף</string>
   <!--
@@ -702,13 +718,25 @@
   <string name="search_widget_text_long">חיפוש ברשת</string>
   <!-- Content description (not visible, for screen readers etc.): Voice search -->
   <string name="search_widget_voice">חיפוש קולי</string>
+  <!-- Content description (not visible, for screen readers etc.): Button in the search widget that starts a search in a private tab -->
+  <string name="search_widget_private_search">חיפוש פרטי</string>
+  <!-- Widget description in the widget picker screen for the search bar widget that includes buttons for private search and for voice search -->
+  <string name="search_bar_widget_description">סרגל חיפוש עם חיפוש פרטי וחיפוש קולי</string>
+  <!-- Widget description in the widget picker screen for the search bar widget that includes buttons for image search, private search and voice search -->
+  <string name="search_bar_with_lens_widget_description">סרגל חיפוש עם חיפוש תמונות, חיפוש פרטי וחיפוש קולי</string>
+  <!-- Widget description in the widget picker screen for the compact search bar widget -->
+  <string name="compact_search_bar_widget_description">סרגל חיפוש קומפקטי</string>
   <!--
     Preferences
 
     Title for the settings page
   -->
   <string name="settings">הגדרות</string>
-  <!-- Preference category for general settings -->
+  <!--
+    Preferences
+
+    Preference category for general settings
+  -->
   <string name="preferences_category_general">כללי</string>
   <!-- Preference category for all links about Fenix -->
   <string name="preferences_category_about">על אודות</string>
@@ -799,6 +827,8 @@
   <string name="preferences_override_sync_tokenserver">שרת Sync מותאם אישית</string>
   <!-- Preference category for account information -->
   <string name="preferences_category_account">חשבון</string>
+  <!-- Preference category for sync controls. Sync can be translated, it's just short for ”Synchronization” in English. -->
+  <string name="preferences_category_sync_controls">סנכרון</string>
   <!-- Preference for changing where the AddressBar is positioned -->
   <string name="preferences_toolbar_2">מיקום שורת הכתובת</string>
   <!-- Preference for changing toolbar layout -->
@@ -817,6 +847,8 @@
   <string name="preferences_toolbar_select_shortcut">בחירת קיצור דרך</string>
   <!-- Title of a menu option allowing to change the shortcut button shown in the toolbar -->
   <string name="toolbar_shortcut_menu_edit_option">עריכת קיצור דרך</string>
+  <!-- Preference category for menu customization -->
+  <string name="preferences_menu">תפריט</string>
   <!-- Preference for gestures based actions -->
   <string name="preferences_gestures">מחוות</string>
   <!-- Preference for settings related to visual options -->
@@ -855,6 +887,8 @@
   <string name="preferences_search_synced_tabs">חיפוש בלשוניות מסונכרנות</string>
   <!-- Preference for account settings -->
   <string name="preferences_account_settings">הגדרות חשבון</string>
+  <!-- Preference for account and sync settings -->
+  <string name="preferences_account_and_sync_settings">חשבון וסנכרון</string>
   <!-- Preference for enabling url autocomplete -->
   <string name="preferences_enable_autocomplete_urls">השלמה אוטומטית של כתובות אתרים</string>
   <!-- Preference title for switch preference to show sponsored Firefox Suggest search suggestions -->
@@ -891,6 +925,10 @@
   <string name="preferences_open_links_in_apps_ask">לשאול לפני פתיחת קישורים</string>
   <!-- Preference for open links in third party apps never open in apps option -->
   <string name="preferences_open_links_in_apps_never">לעולם לא</string>
+  <!-- Preference category header for media related open links in apps settings -->
+  <string name="preferences_media_category">מדיה</string>
+  <!-- Preference label for choosing whether links open in the YouTube app -->
+  <string name="preferences_open_links_in_youtube">פתיחת קישורים ביישומון של YouTube</string>
   <!-- Preference category for file storage. -->
   <string name="preferences_category_file_storage">אחסון קבצים</string>
   <!-- Preference title for downloads default location. -->
@@ -1134,6 +1172,12 @@
   <string name="preferences_sync_now">סנכרון כעת</string>
   <!-- Preference category for sync -->
   <string name="preferences_sync_category">בחירת הפריטים לסנכרון</string>
+  <!-- Preference category for sync controls -->
+  <string name="preferences_category_sync">נתונים מסונכרנים</string>
+  <!-- Summary for the sync preference category. -->
+  <string name="preferences_sync_category_summary">ניהול הפריטים שמסתנכרנים בכל המכשירים המחוברים שלך</string>
+  <!-- Summary for the sync preference category, when user has disabled all synchronisation items. -->
+  <string name="preferences_sync_category_no_engine_selected_summary">שום דבר לא מסונכרן. ניתן לבחור בפריטים שיהיו מסונכרנים בכל המכשירים שלך.</string>
   <!-- Preference for syncing history -->
   <string name="preferences_sync_history">היסטוריה</string>
   <!-- Preference for syncing bookmarks -->
@@ -1146,6 +1190,10 @@
   <string name="preferences_sign_out">התנתקות</string>
   <!-- Preference displays and allows changing current FxA device name -->
   <string name="preferences_sync_device_name">שם המכשיר</string>
+  <!-- Preference category for Device name -->
+  <string name="preferences_device_name_category">שם המכשיר</string>
+  <!-- Label for the Preference that displays and allows changing current device name on Mozilla Account -->
+  <string name="preferences_sync_change_device_name">שינוי שם מכשיר</string>
   <!-- Text shown when user enters empty device name -->
   <string name="empty_device_name_error">שם המכשיר לא יכול להיות ריק.</string>
   <!-- Label indicating that sync is in progress -->
@@ -1265,8 +1313,12 @@
   <string name="preference_simple_toolbar">פשוט</string>
   <!-- Preference for using expanded toolbar -->
   <string name="preference_expanded_toolbar">מורחב</string>
-  <!-- Preference description indicating the toolbar location preference is disabled when the tab strip is enabled -->
-  <string name="preference_toolbar_pref_disabled_explanation">שורת הכתובת חייבת להופיע למעלה כאשר סרגל הלשוניות מוצג.</string>
+  <!-- Preference for changing where the search bar is positioned on the homepage, shown when the user has set the address bar to be displayed at the top of the screen -->
+  <string name="preferences_homepage_search_location">מיקום החיפוש במסך הבית</string>
+  <!-- Preference for showing the homepage search bar in the middle of the homepage -->
+  <string name="preference_homepage_search_location_middle">מרכז</string>
+  <!-- Preference for showing the homepage search bar at the top of the homepage (combined with the address bar, already displayed at the top) -->
+  <string name="preference_homepage_search_location_top">למעלה</string>
   <!-- New tab shortcut in toolbar customization -->
   <string name="toolbar_customize_shortcut_new_tab">פתיחת לשונית חדשה</string>
   <!-- Share shortcut in toolbar customization -->
@@ -1310,6 +1362,12 @@
     Preferences for showing tab strip
   -->
   <string name="preference_tab_strip_show">הצגת סרגל לשוניות</string>
+  <!-- Preference for tab bar placement (top or bottom of the screen) -->
+  <string name="preference_tab_strip_location_header">מיקום סרגל הלשוניות</string>
+  <!-- Preference for using top tab strip -->
+  <string name="preference_top_tab_strip">למעלה</string>
+  <!-- Preference for using bottom tab strip -->
+  <string name="preference_bottom_tab_strip">למטה</string>
   <!--
     Gestures Preferences
 
@@ -1342,6 +1400,8 @@
   <string name="library_desktop_bookmarks_unfiled">סימניות אחרות</string>
   <!-- Option in Library to open History page -->
   <string name="library_history">היסטוריה</string>
+  <!-- Content description (not visible, for screen readers etc.) for the check mark that replaces a site's icon in History and Recently closed tabs when the item is selected -->
+  <string name="library_item_selected_content_description">נבחר</string>
   <!-- Settings Page Title -->
   <string name="settings_title">הגדרות</string>
   <!-- Content description (not visible, for screen readers etc.): "Close button for library settings" -->
@@ -1392,8 +1452,8 @@
     Title of preference for tabs management
   -->
   <string name="preferences_tabs">לשוניות</string>
-  <!-- Title of preference that allows a user to specify the tab view -->
-  <string name="preferences_tab_view">תצוגת לשוניות</string>
+  <!-- Title of preference that allows a user to specify the tab layout -->
+  <string name="preferences_tab_layout">פריסת לשוניות</string>
   <!-- Option for a list tab view -->
   <string name="tab_view_list">רשימה</string>
   <!-- Option for a grid tab view -->
@@ -1441,15 +1501,19 @@
   <!-- Summary for homepage preference indicating opening the homepage when re-opening the app after four hours of inactivity -->
   <string name="opening_screen_after_four_hours_of_inactivity_summary">פתיחה במסך הבית לאחר 4 שעות</string>
   <!--
-    Inactive tabs
+    Tab organization
 
-    Category header of a preference that allows a user to enable or disable the inactive tabs feature
+    Category header for the preferences that control how tabs are organized
   -->
-  <string name="preferences_inactive_tabs">העברת לשוניות ישנות ללא פעילות</string>
-  <!-- Title of inactive tabs preference -->
+  <string name="preferences_tab_organization">ארגון לשוניות</string>
+  <!-- Title of the preference that allows a user to enable or disable the inactive tabs feature -->
+  <string name="preferences_inactive_tabs_toggle_title">לשוניות לא פעילות</string>
+  <!-- Summary of the preference that allows a user to enable or disable the inactive tabs feature. -->
   <string name="preferences_inactive_tabs_title">לשוניות בהן לא צפית במשך שבועיים מועברות לאגף הלא פעילים.</string>
-  <!-- Title for the preference to enable or disable the tab groups feature -->
-  <string name="preferences_tab_groups_feature">הפעלת קבוצות לשוניות</string>
+  <!-- Title of the preference that allows a user to enable or disable the tab groups feature -->
+  <string name="preferences_tab_groups_title">קבוצות לשוניות</string>
+  <!-- Summary of the preference that allows a user to enable or disable the tab groups feature -->
+  <string name="preferences_tab_groups_description">ארגון הלשוניות שלך לקבוצות שניתן לתת להן שם ולשמור אותן.</string>
   <!--
     Privacy report
 
@@ -1669,6 +1733,11 @@
   <string name="close_tab_and_delete_group_confirmation_dialog_cancel">ביטול</string>
   <!-- Content description for the three dot button next to a tab group" -->
   <string name="tab_group_three_dot_button_content_description">אפשרויות נוספות</string>
+  <!--
+    Content description for the Expand button on the contracted menu for a tab group:
+    when tapped, tabs are displayed in an expanded grid or list view, taking up the full screen.
+  -->
+  <string name="tab_groups_strip_expand_group_content_description">הרחבה להצגת לשוניות במסך מלא</string>
   <!-- Text shown on the edit button for a tab group on the three dot menu -->
   <string name="tab_group_three_dot_menu_edit">עריכה</string>
   <!-- Text shown on the ungroup button for a tab group on the three dot menu -->
@@ -1736,16 +1805,6 @@
     %1$d is the number of bookmarks selected
   -->
   <string name="history_multi_select_title">%1$d נבחרו</string>
-  <!-- Text for the header that groups the history for today -->
-  <string name="history_today">היום</string>
-  <!-- Text for the header that groups the history for yesterday -->
-  <string name="history_yesterday">אתמול</string>
-  <!-- Text for the header that groups the history the past 7 days -->
-  <string name="history_7_days">7 הימים האחרונים</string>
-  <!-- Text for the header that groups the history the past 30 days -->
-  <string name="history_30_days">30 הימים האחרונים</string>
-  <!-- Text for the header that groups the history older than the last month -->
-  <string name="history_older">ישן יותר</string>
   <!-- Text shown when no history exists -->
   <string name="history_empty_message">אין היסטוריה כאן</string>
   <!--
@@ -1925,6 +1984,8 @@
   <string name="download_search_no_results_found">לא נמצאו תוצאות</string>
   <!-- Text for the "Select all" button, which selects all downloaded items in the downloads list. -->
   <string name="download_select_all_items">בחירת הכול</string>
+  <!-- Shown in the downloads list in place of a website name when a file came from a data: or blob: URL that has no website address. "data" refers to the data: URL scheme. -->
+  <string name="download_item_source_data">(data)</string>
   <!--
     Downloads Content Type Filters
 
@@ -2375,12 +2436,12 @@
   <string name="sync_sign_in">התחברות אל Sync</string>
   <!-- An option from the share dialog to send link to all other sync devices -->
   <string name="sync_send_to_all">שליחה לכל המכשירים</string>
-  <!-- Text displayed when no other sync devices are available for link sharing -->
-  <string name="sync_no_devices_available">אין מכשירים זמינים</string>
-  <!-- Text displayed when no other sync devices are available for link sharing. -->
-  <string name="sync_no_devices_available_description">כל המכשירים המחוברים ומסונכרנים עם חשבון זה יופיעו כאן.</string>
   <!-- An option from the share dialog to reconnect to sync -->
   <string name="sync_reconnect">התחברות מחדש אל Sync</string>
+  <!-- Label for the button in the share dialog that sends the tab to the selected sync devices -->
+  <string name="sync_send_to_selected_devices">שליחה</string>
+  <!-- Content description announced when a device is selected in the share dialog -->
+  <string name="send_to_devices_device_selected_content_description">נבחר</string>
   <!-- Text displayed when sync is offline and cannot be accessed -->
   <string name="sync_offline">לא־מקוון</string>
   <!-- An option to connect additional devices -->
@@ -2413,10 +2474,14 @@
   <string name="sync_send_tab_empty_state_title">אין מכשירים מחוברים</string>
   <!-- Send tab to synced devices: Empty state message - Displayed when the user has no synced devices -->
   <string name="sync_send_tab_empty_state_description" tools:ignore="BrandUsage">כדי לשלוח לשונית, יש להתחבר ל־Firefox לפחות במכשיר אחד נוסף.</string>
+  <!-- Send tab to synced devices: Empty state link - Displayed when the user has no synced devices -->
+  <string name="sync_send_tab_empty_state_link">כיצד לחבר מכשיר</string>
   <!-- Send tab to synced devices: Connectivity Error title -->
   <string name="sync_send_tab_error_connection_title">יש לבדוק את חיבור האינטרנט שלך</string>
   <!-- Send tab to synced devices: Connectivity Error message - Suggested user action after internet connection has been established -->
   <string name="sync_send_tab_error_connection_text">ולאחר מכן לנסות לשלוח מחדש את הלשונית שלך.</string>
+  <!-- Send tab to synced devices: Connectivity Error button - When tapped, refreshes the list of connected devices. -->
+  <string name="sync_send_tab_error_connection_button">ניסיון חוזר</string>
   <!--
     Notifications
 
@@ -2599,6 +2664,12 @@
   <string name="sign_in_create_account_text" tools:ignore="BrandUsage"><![CDATA[אין לך חשבון? <u>באפשרותך ליצור אחד</u> כדי לסנכרן את Firefox בין מכשירים.]]></string>
   <!-- Text shown in confirmation dialog to sign out of account. %s is the name of the app (for example "Firefox"). -->
   <string name="sign_out_confirmation_message_2">‏‏%s יפסיק להסתנכרן עם החשבון שלך, אבל לא ימחק את נתוני הגלישה שלך ממכשיר זה.</string>
+  <!-- Title of the confirmation dialog shown when the user signs out of their account -->
+  <string name="sign_out_dialog_title">להתנתק מהחשבון שלך?</string>
+  <!-- Body of the confirmation dialog shown when the user signs out of their account -->
+  <string name="sign_out_dialog_message">נתונים מסונכרנים נשארים שמורים בחשבון שלך.</string>
+  <!-- Text for the primary action button of the confirmation dialog shown when the user signs out of their account -->
+  <string name="sign_out_dialog_confirm_button">התנתקות</string>
   <!-- Option to continue signing out of account shown in confirmation dialog to sign out of account -->
   <string name="sign_out_disconnect">התנתקות</string>
   <!-- Option to cancel signing out shown in confirmation dialog to sign out of account -->
@@ -2973,7 +3044,7 @@
   <!-- Title of warning dialog if users have no device authentication set up -->
   <string name="logins_warning_dialog_title_2">אבטחת הססמאות השמורות שלך</string>
   <!-- Message of warning dialog if users have no device authentication set up -->
-  <string name="logins_warning_dialog_message_2">ניתן להגדיר תבנית נעילת מכשיר, קוד או ססמה כדי להגן על הססמאות השמורות שלך מפני גורמים בלתי מהימנים שמחזיקים במכשיר שלך.</string>
+  <string name="logins_warning_dialog_message_2">ניתן להגדיר דפוס נעילה, קוד או ססמה במכשיר כדי להגן על הססמאות השמורות שלך מפני גורמים בלתי מהימנים שמחזיקים במכשיר שלך.</string>
   <!-- Negative button to ignore warning dialog if users have no device authentication set up -->
   <string name="logins_warning_dialog_later">מאוחר יותר</string>
   <!-- Positive button to send users to set up a pin of warning dialog if users have no device authentication set up -->
@@ -3020,8 +3091,6 @@
   <string name="preferences_ip_protection_beta_badge_label">BETA</string>
   <!-- Title for the browser VPN settings screen (displayed in the app bar) -->
   <string name="ip_protection_settings_title">‏VPN מובנה</string>
-  <!-- Title for the browser VPN settings screen (displayed in the app bar) -->
-  <string name="ip_protection_title">VPN</string>
   <!-- Label for the browser VPN toggle on the settings screen -->
   <string name="ip_protection_toggle_label">VPN</string>
   <!-- Content description for the browser VPN settings screen top bar back button -->
@@ -3116,8 +3185,6 @@
   <string name="ip_protection_data_limit_reached_snackbar">נעשה שימוש ב־%1$d ג״ב של נתוני VPN. הגישה תתאפס בחודש הבא.</string>
   <!-- Snackbar (in-app pop-up notification) action button text that takes the user to the VPN settings screen. -->
   <string name="ip_protection_open_settings_snackbar_action">הגדרות</string>
-  <!-- Snackbar (in-app pop-up notification) action button text that takes the user to the VPN settings screen. -->
-  <string name="ip_protection_data_limit_reached_snackbar_action">הגדרות</string>
   <!-- Description shown on the browser VPN settings screen prompting the user to turn the VPN on. -->
   <string name="ip_protection_settings_description" tools:ignore="UnusedResources">ניתן להפעיל את ה־VPN כדי להפוך את הגלישה שלך לפרטית וקשה יותר למעקב.</string>
   <!-- Title shown on the browser VPN settings screen for location selection section. -->
@@ -3223,11 +3290,19 @@
   <!-- Title of warning dialog if users have no device authentication set up -->
   <string name="credit_cards_warning_dialog_title_2">אבטחת אמצעי התשלום השמורים שלך</string>
   <!-- Message of warning dialog if users have no device authentication set up -->
-  <string name="credit_cards_warning_dialog_message_3">ניתן להגדיר תבנית נעילת מכשיר, קוד או ססמה כדי להגן על אמצעי התשלום השמורים שלך מפני גורמים בלתי מהימנים שמחזיקים במכשיר שלך.</string>
+  <string name="credit_cards_warning_dialog_message_3">ניתן להגדיר דפוס נעילה, קוד או ססמה במכשיר כדי להגן על אמצעי התשלום השמורים שלך מפני גורמים בלתי מהימנים שמחזיקים במכשיר שלך.</string>
   <!-- Positive button to send users to set up a pin of warning dialog if users have no device authentication set up -->
   <string name="credit_cards_warning_dialog_set_up_now">להגדיר כעת</string>
   <!-- Negative button to ignore warning dialog if users have no device authentication set up -->
   <string name="credit_cards_warning_dialog_later">מאוחר יותר</string>
+  <!-- Title of the dialog shown on Android Automotive OS (in cars) when users have no device authentication set up and try to access their saved passwords, payment methods, or sign in to their account -->
+  <string name="automotive_authentication_setup_dialog_title">אבטחת הנתונים הרגישים שלך</string>
+  <!-- Message of the dialog shown on Android Automotive OS (in cars) when users have no device authentication set up and try to access their saved passwords, payment methods, or sign in to their account -->
+  <string name="automotive_authentication_setup_dialog_message">ניתן להגדיר דפוס נעילה, קוד או ססמה במכשיר כדי להגן על הנתונים הרגישים השמורים שלך מפני גישה של אחרים במקרה שמישהו אחר נוהג ברכב שלך.</string>
+  <!-- Primary button on the dialog shown on Android Automotive OS (in cars). Tapping it directs users to the device settings to set up a device lock -->
+  <string name="automotive_authentication_setup_dialog_set_up_now">להגדיר כעת</string>
+  <!-- Secondary button of the dialog shown on Android Automotive OS (in cars). Tapping closes the dialogue and cancels the action that triggered the dialogue. -->
+  <string name="automotive_authentication_setup_dialog_cancel">ביטול</string>
   <!-- Title of PIN verification dialog to direct users to re-enter their device credentials to access their credit cards -->
   <string name="credit_cards_biometric_prompt_message_pin">שחרור נעילת המכשיר שלך</string>
   <!-- Message displayed in biometric prompt for authentication, before allowing users to use their stored payment method information -->
@@ -4440,6 +4515,39 @@
   <!-- Link text for terms_of_use_prompt_body_line_two_alternative that links to a site with more information about the Terms of Use -->
   <string name="terms_of_use_prompt_body_line_two_alternative_link" tools:ignore="UnusedResources">כאן</string>
   <!--
+    Sports widget
+
+    Label shown on the sports widget scoreboard when a match is currently being played live.
+  -->
+  <string name="wrex_widget_match_live">חי</string>
+  <!-- Label shown on the sports widget match status badge when the start of a match has been delayed. -->
+  <string name="wrex_widget_match_delayed">מתעכב</string>
+  <!-- Label shown on the sports widget match status badge when a match has been suspended after it started. -->
+  <string name="wrex_widget_match_suspended">מושהה</string>
+  <!-- Label shown on the sports widget match status badge when a match has been postponed to a later date. -->
+  <string name="wrex_widget_match_postponed">נדחה</string>
+  <!-- Sports widget menu item to view the team's match results. -->
+  <string name="wrex_widget_results">תוצאות</string>
+  <!-- Sports widget menu item to view the league standings table. -->
+  <string name="wrex_widget_standings">טבלת דירוגים</string>
+  <!-- Sports widget menu item to browse the team's wallpapers. -->
+  <string name="wrex_widget_wallpapers">תמונות רקע</string>
+  <!-- Sports widget menu item to remove the widget from the homepage. -->
+  <string name="wrex_widget_remove_widget">הסרת הווידג’ט</string>
+  <!-- Content description (for accessibility, not displayed) for the overflow (more options) menu button on the sports widget card. -->
+  <string name="wrex_widget_more_options_content_description">אפשרויות נוספות</string>
+  <!--
+    Content description (for accessibility, not displayed) used for the sports widget card header announcing a live match.
+    %s is the name of the competition the match belongs to (e.g. "FA Cup").
+  -->
+  <string name="wrex_widget_live_game_content_description">%s, משחק חי</string>
+  <!--
+    Content description (for accessibility, not displayed) for a paginated item.
+    %1$s is the name of the competition the match belongs to (e.g. "FA Cup"),
+    %2$d is the current page number, and %3$d is the total number of pages.
+  -->
+  <string name="wrex_widget_page_position_content_description">%1$s, דף %2$d מתוך %3$d</string>
+  <!--
     Privacy notice homepage banner
 
     A message we show the user on the homepage when there is a new version of the privacy notice. 'Firefox' is intentionally hardcoded.
@@ -4495,6 +4603,18 @@
   <string name="lens_camera_mode_qr">סורק QR</string>
   <!-- Toast shown when the user picks an image from the gallery in QR mode but no QR code is found in it -->
   <string name="lens_camera_qr_no_code_found">לא נמצא קוד QR בתמונה</string>
+  <!-- Status shown under an image picked from the gallery or taken with the camera while it is being sent to Google Lens for a visual search -->
+  <string name="lens_camera_loading_status">בתהליך חיפוש ברשת</string>
+  <!-- Button shown under an image picked from the gallery or taken with the camera while it is being sent to Google Lens. Tapping it stops the search and returns to the camera. -->
+  <string name="lens_camera_loading_cancel_button">ביטול</string>
+  <!-- Snackbar message shown when an image picked from the gallery or taken with the camera could not be opened or read, so it was never sent to Google Lens. Shown after returning to the camera. -->
+  <string name="lens_camera_image_load_failed_v2">לא ניתן היה לטעון תמונה זו.</string>
+  <!-- Snackbar message shown when an image picked from the gallery could not be opened or read, so it was never sent to Google Lens. Shown after returning to the camera. -->
+  <string name="lens_camera_image_load_failed">לא ניתן היה לטעון תמונה זו. נא לנסות תמונה אחרת.</string>
+  <!-- Snackbar message shown when an image picked from the gallery or taken with the camera could not be searched because of a network problem or an error from Google Lens. Shown after returning to the camera, next to the lens_camera_upload_failed_retry_button action. -->
+  <string name="lens_camera_upload_failed">לא ניתן היה לקבל תוצאות מ־Google Lens</string>
+  <!-- Action in the snackbar shown when an image picked from the gallery or taken with the camera could not be searched with Google Lens. Tapping it searches the same image again. -->
+  <string name="lens_camera_upload_failed_retry_button">ניסיון חוזר</string>
   <!-- Title of the bottom sheet shown the first time the user opens the Google Lens camera screen -->
   <string name="lens_opt_out_title">חיפוש באמצעות Google Lens</string>
   <!-- Description of the bottom sheet shown the first time the user opens the Google Lens camera screen -->
@@ -4554,6 +4674,12 @@
 
     Content description for accessibility (used by screen readers): Description for the button that triggers the start of a signature workflow on the PDF displayed on the screen.
   -->
+  <string name="pdf_tools_sign_content_description_2">הוספת חתימה</string>
+  <!--
+    PDF viewer toolbar and buttons
+
+    Content description for accessibility (used by screen readers): Description for the button that triggers the start of a signature workflow on the PDF displayed on the screen.
+  -->
   <string name="pdf_tools_sign_content_description">חתימה על PDF</string>
   <!-- Content description for accessibility (used by screen readers): Description of the button that downloads the PDF displayed on the screen to the user's device. -->
   <string name="pdf_tools_download_content_description">הורדת PDF</string>
@@ -4575,4 +4701,24 @@
   <string name="pdf_tools_signature_clear_button">ניקוי</string>
   <!-- The text for the button that adds the signature the user has typed to the PDF. -->
   <string name="pdf_tools_signature_add_button">הוספה</string>
+  <!-- Content description for accessibility (used by screen readers): Description for the loading indicator when a signature is in the process of being added to a PDF. -->
+  <string name="pdf_tools_signature_adding_content_description">בתהליך הוספת חתימה</string>
+  <!--
+    Listen to page
+
+    Content description for the reader view panel: a group of buttons floating over the content, which allow customizing the reader view or activating the Listen to Page feature
+  -->
+  <string name="reader_mode_panel_content_description_2">אפשרויות תצוגת קריאה</string>
+  <!--
+    Listen to page
+
+    Content description for the reader mode panel: a group of buttons floating over the content
+  -->
+  <string name="reader_mode_panel_content_description">אפשרויות מצב קריאה</string>
+  <!-- Content description for the button in the reader view panel that turns on the Listen to Page feature (playback of content begins when button is pressed) -->
+  <string name="reader_mode_panel_listen_content_description">קריאה בקול</string>
+  <!-- Content description for media player displayed in Reader view when the Listen to Page (Read Aloud) feature is selected -->
+  <string name="reader_mode_panel_media_player_content_description">נגן מדיה</string>
+  <!-- Content description for the reader view button Reader view facilitates readability and has a Listen to Page feature. Button icon is a document with headphones, and is displayed next to the page URL when the feature is available. -->
+  <string name="browser_menu_read_or_listen">תצוגת קריאה, לקרוא או להאזין לדף</string>
 </resources>
