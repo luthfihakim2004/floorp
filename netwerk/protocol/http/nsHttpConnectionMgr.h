@@ -47,7 +47,7 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   NS_DECL_NSINAMED
 
   //-------------------------------------------------------------------------
-  // NOTE: functions below may only be called on the main thread.
+  // NOTE: the constructor may only be called on the main thread.
   //-------------------------------------------------------------------------
 
   nsHttpConnectionMgr();
@@ -99,6 +99,13 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   // bit different.
   void ReportSpdyConnection(nsHttpConnection*, bool usingSpdy,
                             bool disallowHttp3);
+
+  // Move an established h3 connection out of an Http3Policy::Only entry (eager
+  // Alt-Svc h3 validation) and into the origin's entry, re-keying it onto an
+  // Http3Policy::Allowed connection info. Returns the entry the connection now
+  // lives in, or nullptr if it was left where it was.
+  already_AddRefed<ConnectionEntry> HandOffHttp3OnlyConnection(
+      HttpConnectionBase* aConn, ConnectionEntry* aFromEnt);
 
   void ReportHttp3Connection(HttpConnectionBase* conn,
                              ConnectionEntry* entry = nullptr);

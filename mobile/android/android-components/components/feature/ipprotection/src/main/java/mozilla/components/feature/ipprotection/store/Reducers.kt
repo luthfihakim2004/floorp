@@ -7,18 +7,20 @@
 package mozilla.components.feature.ipprotection.store
 
 import mozilla.components.ExperimentalAndroidComponentsApi
-import mozilla.components.concept.engine.ipprotection.IPProtectionHandler
+import mozilla.components.concept.engine.ipprotection.ProxyState
 import mozilla.components.concept.engine.ipprotection.ServiceState
 import mozilla.components.feature.ipprotection.store.state.AccountStatus
 import mozilla.components.feature.ipprotection.store.state.Authorized
 import mozilla.components.feature.ipprotection.store.state.Country
 import mozilla.components.feature.ipprotection.store.state.IPProtectionState
+import mozilla.components.feature.ipprotection.store.state.LocationListUpdateState
 import mozilla.components.feature.ipprotection.store.state.LocationState
 import mozilla.components.feature.ipprotection.store.state.PendingActivationRequest
 import mozilla.components.feature.ipprotection.store.state.ProxyActivation
 import mozilla.components.feature.ipprotection.store.state.ProxyStatus
 import mozilla.components.feature.ipprotection.store.state.Recommended
 import mozilla.components.feature.ipprotection.store.state.Uninitialized
+import mozilla.components.feature.ipprotection.store.state.isActivationInFlight
 
 @Suppress("CognitiveComplexMethod", "LongMethod", "ForbiddenSuppress")
 // FIXME(IPP) break this up into more smaller parts only if the changes are meaningful.
@@ -31,72 +33,45 @@ internal fun iPProtectionReducer(
             state.copy(eligibilityStatus = action.eligibility)
         }
 
-        is IPProtectionAction.EngineStateChanged -> {
-            val newProxyStatus = action.info.asProxyStatus()
-
-            // Clear `activate` once the engine settles so a re-request reads as a new transition.
+        is IPProtectionAction.ProxyStateChanged -> {
+            val newProxyStatus = action.proxyState.asProxyStatus()
             val newPendingActivationRequest =
-                when (action.info.serviceState) {
-                    ServiceState.Uninitialized -> null
-
-                    ServiceState.Unavailable,
-                    ServiceState.Unauthenticated,
-                    ServiceState.OptedOut -> PendingActivationRequest.Deactivate
-
-                    ServiceState.Ready ->
-                        when (newProxyStatus) {
-                            Authorized.Activating -> state.pendingActivationRequest
-                            else -> null
-                        }
-                }
-
-            // Apart from the first enrollment where the user goes through the enrollment process,
-            // we rely on the service state to be the source of truth for entitlement.
-            // UNLESS the user is signed out: we could still intermittently get an EngineState
-            // update with the service being READY, before EngineState updates itself with the new
-            // account status.
-            val newAccountStatus =
-                if (
-                    action.info.serviceState == ServiceState.Ready &&
-                        state.accountState.status != AccountStatus.NoAccount
-                ) {
-                    AccountStatus.EnrolledAndEntitled
-                } else {
-                    state.accountState.status
-                }
-
-            // Whether the proxy was already active before this update.
-            // UNLESS it's in ConnectionError: that's a temporary network problem, not a real "off"
-            // state, so we still treat it as active for this check.
-            val wasActive = state.proxyStatus == Authorized.Active || state.proxyStatus == Authorized.ConnectionError
-
-            // Whether the new status means the proxy just stopped being active after going Idle
-            // or reaching its data limit.
-            val stoppedBeingActive = newProxyStatus == Authorized.Idle || newProxyStatus == Authorized.DataLimitReached
-
-            // Whether the proxy just turned on when transitioning into Active from a non-active state.
-            val hasActivated = newProxyStatus == Authorized.Active && state.proxyStatus != Authorized.Active
-
-            // Whether the proxy just turned off after being active (or in a temporary error) and then stopping.
-            val hasDeactivated = wasActive && stoppedBeingActive
-
-            val newProxyActivation =
-                when {
-                    hasActivated -> ProxyActivation.TurningOn
-                    hasDeactivated -> ProxyActivation.TurningOff
-                    else -> state.proxyActivation
-                }
+                state.newPendingActivationRequest(
+                    newProxyStatus = newProxyStatus,
+                    newServiceState = state.serviceStatus,
+                )
+            val newProxyActivation = state.newProxyActivation(newProxyStatus)
 
             state.copy(
-                remainingDataBytes = action.info.remaining,
-                maxDataBytes = action.info.max,
-                resetDate = action.info.resetTime,
                 proxyStatus = newProxyStatus,
-                serviceStatus = action.info.serviceState,
-                accountState = state.accountState.copy(status = newAccountStatus),
-                lastError = action.info.lastError,
                 proxyActivation = newProxyActivation,
                 pendingActivationRequest = newPendingActivationRequest,
+                lastError = action.lastError,
+            )
+        }
+
+        is IPProtectionAction.ServiceStateChanged -> {
+            val newPendingActivationRequest =
+                state.newPendingActivationRequest(
+                    newProxyStatus = state.proxyStatus,
+                    newServiceState = action.serviceState,
+                )
+            val newAccountStatus = state.newAccountStatus(action.serviceState)
+            val newLocationState = state.newLocationState(action.serviceState)
+
+            state.copy(
+                serviceStatus = action.serviceState,
+                accountState = state.accountState.copy(status = newAccountStatus),
+                pendingActivationRequest = newPendingActivationRequest,
+                locationState = newLocationState,
+            )
+        }
+
+        is IPProtectionAction.UsageChanged -> {
+            state.copy(
+                remainingDataBytes = action.remaining,
+                maxDataBytes = action.max,
+                resetDate = action.resetTime,
             )
         }
 
@@ -111,6 +86,7 @@ internal fun iPProtectionReducer(
                                     Country(countryCode = it.code, available = it.available)
                                 },
                         previousLocation = state.locationState.previousLocation,
+                        updateState = LocationListUpdateState.Updated,
                     )
             )
         }
@@ -121,7 +97,6 @@ internal fun iPProtectionReducer(
 
         is IPProtectionAction.Toggle -> {
             when (state.serviceStatus) {
-                ServiceState.OptedOut,
                 ServiceState.Unavailable,
                 ServiceState.Uninitialized -> {
                     return state
@@ -222,6 +197,15 @@ internal fun iPProtectionReducer(
             state.copy(pendingActivationRequest = null, accountState = accountState)
         }
 
+        is IPProtectionAction.ActivationRequestCompleted -> {
+            // Only clear the request this reply is for. A different one may have been queued in the meantime.
+            if (state.pendingActivationRequest == action.request) {
+                state.copy(pendingActivationRequest = null)
+            } else {
+                state
+            }
+        }
+
         is IPProtectionAction.LocationSwitchFailed -> {
             state.copy(
                 pendingActivationRequest = null,
@@ -231,6 +215,24 @@ internal fun iPProtectionReducer(
                         previousLocation = null,
                     ),
             )
+        }
+
+        is IPProtectionAction.LocationUpdateFailed -> {
+            // Edge case: the user might log out while the request is in progress. Logging out does
+            // reset the update state, so a failed request after a reset should be ignored.
+            if (state.locationState.updateState == LocationListUpdateState.Requested) {
+                state.copy(locationState = state.locationState.copy(updateState = LocationListUpdateState.Failed))
+            } else {
+                state
+            }
+        }
+
+        is IPProtectionAction.CheckLocations -> {
+            if (state.locationState.updateState == LocationListUpdateState.Failed) {
+                state.copy(locationState = state.locationState.copy(updateState = LocationListUpdateState.Requested))
+            } else {
+                state
+            }
         }
 
         is IPProtectionAction.CheckAccount -> {
@@ -248,10 +250,8 @@ internal fun iPProtectionReducer(
                 pendingActivationRequest =
                     // Authorized.Activating state could be problematic here: if the user turns vpn on and that toggle
                     // is taking a lot of time, then changing a country won't make an additional request, but the UI
-                    // will be showing the newly selected country. We already had problems with spamming activation
-                    // request to the toolkit code while it's still processing the previous one, we probably want to
-                    // prevent user from being able to toggle the countries while the proxy is in activating state,
-                    // but that requires UX change - tracked here: https://bugzilla.mozilla.org/show_bug.cgi?id=2065317
+                    // will be showing the newly selected country. The location picker is disabled while an activation
+                    // is in flight so the user cannot reach this, but a location restored from the cache still can.
                     if (state.proxyStatus == Authorized.Active) {
                         PendingActivationRequest.Activate(action.location.countryCode, isLocationSwitch = true)
                     } else {
@@ -262,6 +262,7 @@ internal fun iPProtectionReducer(
                         selectedLocation = action.location,
                         locations = state.locationState.locations,
                         previousLocation = state.locationState.selectedLocation,
+                        updateState = state.locationState.updateState,
                     ),
             )
 
@@ -271,8 +272,11 @@ internal fun iPProtectionReducer(
                     LocationState(
                         selectedLocation = Recommended,
                         locations = state.locationState.locations,
+                        updateState = state.locationState.updateState,
                     )
             )
+
+        is IPProtectionAction.PersistedLocationUnavailable -> state
 
         is InternalAction -> internalReducer(state, action)
     }
@@ -301,11 +305,18 @@ internal fun internalReducer(
                 AccountStatus.EnrolledAndEntitled -> state
 
                 AccountStatus.Uninitialized,
-                AccountStatus.WarmingUp,
                 AccountStatus.NeedsAuthentication,
                 AccountStatus.NeedsAuthorization,
                 AccountStatus.Authenticated -> {
                     state.copy(accountState = state.accountState.copy(status = action.status))
+                }
+
+                AccountStatus.WarmingUp -> {
+                    if (state.accountState.status == AccountStatus.Uninitialized) {
+                        state.copy(accountState = state.accountState.copy(status = action.status))
+                    } else {
+                        state
+                    }
                 }
 
                 AccountStatus.AuthFailed -> {
@@ -321,8 +332,6 @@ internal fun internalReducer(
         is InternalAction.AccountReadyForEnrollment -> {
             state.copy(accountState = state.accountState.copy(status = AccountStatus.AwaitingEnrollment))
         }
-
-        is InternalAction.UpdateServiceState -> state.copy(serviceStatus = action.serviceState)
 
         // Do nothing while we wait for our pending authentication to change.
         is InternalAction.AwaitingAuth -> state.copy(accountState = state.accountState.copy(status = action.status))
@@ -360,7 +369,21 @@ private fun IPProtectionState.clearProfileData(action: InternalAction.AccountMan
         proxyActivation = ProxyActivation.Idle,
         pendingActivationRequest = PendingActivationRequest.Deactivate,
         accountState = accountState.copy(status = action.status),
+        locationState = LocationState(),
     )
+}
+
+private fun IPProtectionState.maybeDeactivate(): PendingActivationRequest.Deactivate? {
+    if (isActivationInFlight) {
+        return PendingActivationRequest.Deactivate
+    }
+
+    return when (proxyStatus) {
+        Authorized.Active,
+        Authorized.ConnectionError,
+        Authorized.DataLimitReached -> PendingActivationRequest.Deactivate
+        else -> null
+    }
 }
 
 private fun IPProtectionState.handleFinishingEnrollment(action: InternalAction.FinishingEnrollment): IPProtectionState {
@@ -375,13 +398,78 @@ private fun IPProtectionState.handleFinishingEnrollment(action: InternalAction.F
     }
 }
 
-private fun IPProtectionHandler.StateInfo.asProxyStatus(): ProxyStatus {
-    return when (proxyState) {
-        IPProtectionHandler.StateInfo.PROXY_STATE_READY -> Authorized.Idle
-        IPProtectionHandler.StateInfo.PROXY_STATE_ACTIVATING -> Authorized.Activating
-        IPProtectionHandler.StateInfo.PROXY_STATE_ACTIVE -> Authorized.Active
-        IPProtectionHandler.StateInfo.PROXY_STATE_PAUSED -> Authorized.DataLimitReached
-        IPProtectionHandler.StateInfo.PROXY_STATE_ERROR -> Authorized.ConnectionError
-        else -> Uninitialized
+private fun IPProtectionState.newProxyActivation(newProxyStatus: ProxyStatus): ProxyActivation {
+    // Whether the proxy was already active before this update.
+    // UNLESS it's in ConnectionError: that's a temporary network problem, not a real "off"
+    // state, so we still treat it as active for this check.
+    val wasActive = proxyStatus == Authorized.Active || proxyStatus == Authorized.ConnectionError
+
+    // Whether the new status means the proxy just stopped being active after going Idle
+    // or reaching its data limit.
+    val stoppedBeingActive = newProxyStatus == Authorized.Idle || newProxyStatus == Authorized.DataLimitReached
+
+    // Whether the proxy just turned on when transitioning into Active from a non-active state.
+    val hasActivated = newProxyStatus == Authorized.Active && proxyStatus != Authorized.Active
+
+    // Whether the proxy just turned off after being active (or in a temporary error) and then stopping.
+    val hasDeactivated = wasActive && stoppedBeingActive
+
+    return when {
+        hasActivated -> ProxyActivation.TurningOn
+        hasDeactivated -> ProxyActivation.TurningOff
+        else -> proxyActivation
+    }
+}
+
+private fun IPProtectionState.newPendingActivationRequest(
+    newProxyStatus: ProxyStatus,
+    newServiceState: ServiceState,
+): PendingActivationRequest? {
+    // Clear `activate` once the engine settles so a re-request reads as a new transition.
+    return when (newServiceState) {
+        ServiceState.Uninitialized -> null
+
+        ServiceState.Unavailable,
+        ServiceState.Unauthenticated -> maybeDeactivate()
+
+        ServiceState.Ready ->
+            when (newProxyStatus) {
+                Authorized.Activating -> pendingActivationRequest
+                else -> null
+            }
+    }
+}
+
+private fun IPProtectionState.newAccountStatus(newServiceState: ServiceState): AccountStatus {
+    // Apart from the first enrollment where the user goes through the enrollment process,
+    // we rely on the service state to be the source of truth for entitlement.
+    // UNLESS the user is signed out: we could still intermittently get a ServiceState.Ready
+    // report before the engine updates itself with the new account status.
+    return if (newServiceState == ServiceState.Ready && accountState.status != AccountStatus.NoAccount) {
+        AccountStatus.EnrolledAndEntitled
+    } else {
+        accountState.status
+    }
+}
+
+private fun IPProtectionState.newLocationState(newServiceState: ServiceState): LocationState {
+    return if (
+        newServiceState == ServiceState.Ready && locationState.updateState == LocationListUpdateState.NotRequested
+    ) {
+        locationState.copy(updateState = LocationListUpdateState.Requested)
+    } else {
+        locationState
+    }
+}
+
+private fun ProxyState.asProxyStatus(): ProxyStatus {
+    return when (this) {
+        ProxyState.UNKNOWN,
+        ProxyState.NOT_READY -> Uninitialized
+        ProxyState.READY -> Authorized.Idle
+        ProxyState.ACTIVATING -> Authorized.Activating
+        ProxyState.ACTIVE -> Authorized.Active
+        ProxyState.PAUSED -> Authorized.DataLimitReached
+        ProxyState.ERROR -> Authorized.ConnectionError
     }
 }

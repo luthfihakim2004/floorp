@@ -111,7 +111,13 @@ nsresult nsVideoFrame::CreateAnonymousContent(
     NS_ENSURE_TRUE(nodeInfo, NS_ERROR_OUT_OF_MEMORY);
     mPosterImage = NS_NewHTMLImageElement(nodeInfo.forget());
     NS_ENSURE_TRUE(mPosterImage, NS_ERROR_OUT_OF_MEMORY);
-    UpdatePosterSource(false);
+
+    auto* videoElement = static_cast<HTMLVideoElement*>(GetContent());
+    if (!videoElement->IsLazyLoading()) {
+      // Defer poster source update until lazy loading ends.
+      // UpdatePosterSource is called by StopLazyLoading.
+      UpdatePosterSource(false);
+    }
 
     // XXX(Bug 1631371) Check if this should use a fallible operation as it
     // pretended earlier.
@@ -163,6 +169,9 @@ nsIContent* nsVideoFrame::GetVideoControls() const {
 void nsVideoFrame::Destroy(DestroyContext& aContext) {
   if (mReflowCallbackPosted) {
     PresShell()->CancelReflowCallback(this);
+  }
+  if (mPosterImage) {
+    mPosterImage->DestroyContent();
   }
   aContext.AddAnonymousContent(mCaptionDiv.forget());
   aContext.AddAnonymousContent(mPosterImage.forget());
@@ -521,8 +530,8 @@ void nsVideoFrame::UpdatePosterSource(bool aNotify) {
                             nsGkAtoms::_empty, eIgnoreCase)) {
     nsAutoString posterStr;
     element->GetPoster(posterStr);
-    mPosterImage->SetAttr(kNameSpaceID_None, nsGkAtoms::src, posterStr,
-                          aNotify);
+    mPosterImage->SetAttr(kNameSpaceID_None, nsGkAtoms::src, posterStr, aNotify,
+                          IsKnownNewAttr::No);
   } else {
     mPosterImage->UnsetAttr(kNameSpaceID_None, nsGkAtoms::src, aNotify);
   }
@@ -532,7 +541,12 @@ nsresult nsVideoFrame::AttributeChanged(int32_t aNameSpaceID,
                                         nsAtom* aAttribute,
                                         AttrModType aModType) {
   if (aAttribute == nsGkAtoms::poster && HasVideoElement()) {
-    UpdatePosterSource(true);
+    auto* element = static_cast<HTMLVideoElement*>(GetContent());
+    if (!element->IsLazyLoading()) {
+      // Defer poster source update until lazy loading ends.
+      // UpdatePosterSource is called by StopLazyLoading.
+      UpdatePosterSource(true);
+    }
   }
   return nsContainerFrame::AttributeChanged(aNameSpaceID, aAttribute, aModType);
 }
@@ -613,7 +627,7 @@ class nsDisplayVideo final : public nsPaintedDisplayItem {
     return container.forget();
   }
 
-  bool CreateWebRenderCommands(
+  WebRenderCommandsResult CreateWebRenderCommands(
       mozilla::wr::DisplayListBuilder& aBuilder,
       mozilla::wr::IpcResourceUpdateQueue& aResources,
       const mozilla::layers::StackingContextHelper& aSc,
@@ -624,7 +638,7 @@ class nsDisplayVideo final : public nsPaintedDisplayItem {
     nsRect dest;
     RefPtr<ImageContainer> container = GetImageContainer(destGFXRect, dest);
     if (!container) {
-      return true;
+      return Ok();
     }
 
     container->SetRotation(element->RotationDegrees());
@@ -639,7 +653,7 @@ class nsDisplayVideo final : public nsPaintedDisplayItem {
 
     dom::ContainerTimingHelpers::MaybeProcessPaintForContainer(element, Frame(),
                                                                dest);
-    return true;
+    return Ok();
   }
 
   // For opaque videos, we will want to override GetOpaqueRegion here.

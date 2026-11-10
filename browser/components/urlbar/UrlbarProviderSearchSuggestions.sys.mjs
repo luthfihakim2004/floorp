@@ -11,10 +11,9 @@ import {
   UrlbarProvider,
   UrlbarUtils,
 } from "moz-src:///browser/components/urlbar/UrlbarUtils.sys.mjs";
+import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
-const lazy = {};
-
-ChromeUtils.defineESModuleGetters(lazy, {
+const lazy = XPCOMUtils.declareLazy({
   DEFAULT_FORM_HISTORY_PARAM:
     "moz-src:///toolkit/components/search/SearchSuggestionController.sys.mjs",
   FormHistory: "resource://gre/modules/FormHistory.sys.mjs",
@@ -360,6 +359,11 @@ export class UrlbarProviderSearchSuggestions extends UrlbarProvider {
     return undefined;
   }
 
+  /**
+   * @param {UrlbarQueryContext} queryContext
+   * @param {UrlbarParentController} controller
+   * @param {object} details
+   */
   onEngagement(queryContext, controller, details) {
     let { result } = details;
 
@@ -553,12 +557,12 @@ export class UrlbarProviderSearchSuggestions extends UrlbarProvider {
               description: entry.description || undefined,
               query,
               icon: !entry.value
-                ? await engine.getIconURL()
-                : UrlbarUtils.getRemoteIconUrl(
-                    entry.icon,
-                    UrlbarProviderSearchSuggestions.RICH_ICON_SIZE,
-                    controller
-                  ),
+                ? await UrlbarUtils.getEngineIconUrl(engine, controller)
+                : UrlbarUtils.getRemoteImageUrl({
+                    controller,
+                    url: entry.icon,
+                    size: UrlbarProviderSearchSuggestions.RICH_ICON_SIZE,
+                  }),
               helpUrl: entry.trending ? TRENDING_HELP_URL : undefined,
             },
             highlights: {
@@ -661,9 +665,12 @@ export class UrlbarProviderSearchSuggestions extends UrlbarProvider {
     Glean.urlbarTrending.block.add(1);
   }
 
-  /*
+  /**
    * Remove all the trending results and show an acknowledgement that the
    * trending suggestions have been turned off.
+   *
+   * @param {UrlbarParentController} controller
+   * @param {UrlbarQueryContext} queryContext
    */
   #replaceTrendingResultWithAcknowledgement(controller, queryContext) {
     let resultsToRemove = queryContext.results.filter(

@@ -13,11 +13,9 @@ import org.mozilla.fenix.ui.efficiency.helpers.BaseTest
 import org.mozilla.fenix.ui.efficiency.selectors.BrowserPageSelectors
 import org.mozilla.fenix.ui.efficiency.selectors.HomeSelectors
 import org.mozilla.fenix.ui.efficiency.selectors.MainMenuSelectors
+import org.mozilla.fenix.ui.efficiency.selectors.SettingsSelectors
 
 class SettingsAddonsTest : BaseTest() {
-
-    private val mockWebServer
-        get() = fenixTestRule.mockWebServer
 
     // Converted from legacy SettingsAddonsTest.verifyUBlockWorksInPrivateModeTest
     // TestRail link: https://mozilla.testrail.io/index.php?/cases/view/561594
@@ -53,8 +51,8 @@ class SettingsAddonsTest : BaseTest() {
         on.browserPage
             .navigateToPage(trackingProtectionPage.url.toString())
             .verifyUrl(trackingProtectionPage.url.toString())
-        on.home.navigateToPage().mozClick(HomeSelectors.TOP_SITE_ITEM("Wikipedia"))
+        on.home.navigateToPage().mozClick(HomeSelectors.FIRST_TOP_SITE_ITEM)
         on.browserPage.mozVerify(BrowserPageSelectors.ENGINE_VIEW).navigateToPage()
-        on.settings.navigateToPage().mozVerifyElementsByGroup("settingsView")
+        on.settings.navigateToPage().mozVerifyElementsByGroup(SettingsSelectors.Group.SETTINGS_VIEW)
     }
 }

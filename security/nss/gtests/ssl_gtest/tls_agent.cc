@@ -534,9 +534,6 @@ const std::vector<SSLNamedGroup> kAllDHEGroups = {
     ssl_grp_ffdhe_4096,
     ssl_grp_ffdhe_6144,
     ssl_grp_ffdhe_8192,
-#ifndef NSS_DISABLE_KYBER
-    ssl_grp_kem_xyber768d00,
-#endif
     ssl_grp_kem_mlkem768x25519,
     ssl_grp_kem_secp256r1mlkem768,
     ssl_grp_kem_secp384r1mlkem1024,
@@ -552,9 +549,6 @@ const std::vector<SSLNamedGroup> kNonPQDHEGroups = {
 const std::vector<SSLNamedGroup> kECDHEGroups = {
     ssl_grp_ec_curve25519,          ssl_grp_ec_secp256r1,
     ssl_grp_ec_secp384r1,           ssl_grp_ec_secp521r1,
-#ifndef NSS_DISABLE_KYBER
-    ssl_grp_kem_xyber768d00,
-#endif
     ssl_grp_kem_mlkem768x25519,     ssl_grp_kem_secp256r1mlkem768,
     ssl_grp_kem_secp384r1mlkem1024,
 };
@@ -570,9 +564,6 @@ const std::vector<SSLNamedGroup> kFasterDHEGroups = {
     ssl_grp_ec_secp384r1,
     ssl_grp_ffdhe_2048,
     ssl_grp_ffdhe_3072,
-#ifndef NSS_DISABLE_KYBER
-    ssl_grp_kem_xyber768d00,
-#endif
     ssl_grp_kem_mlkem768x25519,
     ssl_grp_kem_secp256r1mlkem768,
     ssl_grp_kem_secp384r1mlkem1024,
@@ -580,9 +571,6 @@ const std::vector<SSLNamedGroup> kFasterDHEGroups = {
 };
 
 const std::vector<SSLNamedGroup> kEcdhHybridGroups = {
-#ifndef NSS_DISABLE_KYBER
-    ssl_grp_kem_xyber768d00,
-#endif
     ssl_grp_kem_mlkem768x25519,
     ssl_grp_kem_secp256r1mlkem768,
     ssl_grp_kem_secp384r1mlkem1024,
@@ -755,7 +743,6 @@ void TlsAgent::CheckKEA(SSLKEAType kea, SSLNamedGroup kea_group,
   if (kea_size == 0) {
     switch (kea_group) {
       case ssl_grp_ec_curve25519:
-      case ssl_grp_kem_xyber768d00:
       case ssl_grp_kem_mlkem768x25519:
         kea_size = 255;
         break;
@@ -1045,14 +1032,14 @@ void TlsAgent::ValidateCipherSpecs() {
   // We use one ciphersuite in each direction.
   PRInt32 expected = 2;
   if (variant_ == ssl_variant_datagram) {
-    // For DTLS 1.3, the client retains the cipher spec for early data and the
-    // handshake so that it can retransmit EndOfEarlyData and its final flight.
-    // It also retains the handshake read cipher spec so that it can read ACKs
-    // from the server. The server retains the handshake read cipher spec so it
-    // can read the client's retransmitted Finished.
+    // For DTLS 1.3, the client retains the cipher spec for the handshake so
+    // that it can retransmit its final flight. It also retains the handshake
+    // read cipher spec so that it can read ACKs from the server. The server
+    // retains the handshake read cipher spec so it can read the client's
+    // retransmitted Finished.
     if (expected_version_ >= SSL_LIBRARY_VERSION_TLS_1_3) {
       if (role_ == CLIENT) {
-        expected = info_.earlyDataAccepted ? 5 : 4;
+        expected = 4;
       } else {
         expected = 3;
       }

@@ -36,15 +36,6 @@ const gCertDB = Cc["@mozilla.org/security/x509certdb;1"].getService(
   Ci.nsIX509CertDB
 );
 
-function findCertWithSubjectName(subjectName) {
-  for (let cert of gCertDB.getCerts()) {
-    if (cert.subjectName == subjectName) {
-      return cert;
-    }
-  }
-  return null;
-}
-
 add_task(async function test_pkcs11_module() {
   let promptFactoryCID = MockRegistrar.register(
     "@mozilla.org/prompter;1",
@@ -56,9 +47,10 @@ add_task(async function test_pkcs11_module() {
 
   Services.fog.initializeFOG();
 
+  await Services.fog.testFlushAllChildren();
   equal(
     0,
-    await Glean.pkcs11.thirdPartyModulesLoaded.testGetValue(),
+    (await Glean.pkcs11.thirdPartyModulesLoaded.testGetValue()) ?? 0,
     "should have no third-party modules to begin with"
   );
 
@@ -71,6 +63,7 @@ add_task(async function test_pkcs11_module() {
   libraryFile.append("pkcs11testmodule");
   libraryFile.append(ctypes.libraryName("pkcs11testmodule"));
   await loadPKCS11Module(libraryFile, "PKCS11 Test Module", true);
+  await Services.fog.testFlushAllChildren();
   equal(
     1,
     await Glean.pkcs11.thirdPartyModulesLoaded.testGetValue(),
@@ -81,11 +74,11 @@ add_task(async function test_pkcs11_module() {
     "pkcs11testmodule"
   );
 
-  let testClientCertificate = findCertWithSubjectName("CN=client cert rsa");
+  let testClientCertificate = await findCertByCommonName("client cert rsa");
   ok(testClientCertificate, "test module should expose rsa client certificate");
 
-  let testServerCertificate = findCertWithSubjectName(
-    "CN=EE issued by intermediate"
+  let testServerCertificate = await findCertByCommonName(
+    "EE issued by intermediate"
   );
   ok(testServerCertificate, "test module should expose server certificate");
   // If the server certificate verifies as a server certificate without having
@@ -114,6 +107,7 @@ add_task(async function test_pkcs11_module() {
     Ci.nsIPKCS11ModuleDB
   );
   await pkcs11ModuleDB.deleteModule("PKCS11 Test Module");
+  await Services.fog.testFlushAllChildren();
   equal(
     0,
     await Glean.pkcs11.thirdPartyModulesLoaded.testGetValue(),

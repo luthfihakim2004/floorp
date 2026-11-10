@@ -62,6 +62,7 @@ namespace jit {
   _(Lsh)                          \
   _(Rsh)                          \
   _(Ursh)                         \
+  _(Rotate)                       \
   _(SignExtendInt32)              \
   _(Add)                          \
   _(Sub)                          \
@@ -130,6 +131,7 @@ namespace jit {
   _(ToDouble)                     \
   _(ToFloat32)                    \
   _(ToFloat16)                    \
+  _(UnsignedToDouble)             \
   _(TruncateToInt32)              \
   _(CanonicalizeNaN)              \
   _(NewObject)                    \
@@ -300,6 +302,17 @@ class RRsh final : public RInstruction {
 class RUrsh final : public RInstruction {
  public:
   RINSTRUCTION_HEADER_NUM_OP_(Ursh, 2)
+
+  [[nodiscard]] bool recover(JSContext* cx,
+                             SnapshotIterator& iter) const override;
+};
+
+class RRotate final : public RInstruction {
+ private:
+  bool isLeftRotate_;
+
+ public:
+  RINSTRUCTION_HEADER_NUM_OP_(Rotate, 2)
 
   [[nodiscard]] bool recover(JSContext* cx,
                              SnapshotIterator& iter) const override;
@@ -883,6 +896,14 @@ class RToFloat32 final : public RInstruction {
 class RToFloat16 final : public RInstruction {
  public:
   RINSTRUCTION_HEADER_NUM_OP_(ToFloat16, 1)
+
+  [[nodiscard]] bool recover(JSContext* cx,
+                             SnapshotIterator& iter) const override;
+};
+
+class RUnsignedToDouble final : public RInstruction {
+ public:
+  RINSTRUCTION_HEADER_NUM_OP_(UnsignedToDouble, 1)
 
   [[nodiscard]] bool recover(JSContext* cx,
                              SnapshotIterator& iter) const override;
