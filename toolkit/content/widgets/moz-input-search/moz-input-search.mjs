@@ -2,8 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/// <reference path="./moz-input-search.tagmap.d.ts" />
+
 import { html, ifDefined } from "../vendor/lit.all.mjs";
-import MozInputText from "chrome://global/content/elements/moz-input-text.mjs";
+import { MozInputText } from "chrome://global/content/elements/moz-input-text.mjs";
 
 /**
  * A search input custom element.
@@ -14,6 +16,7 @@ import MozInputText from "chrome://global/content/elements/moz-input-text.mjs";
  * @property {string} name - The name of the input control
  * @property {string} value - The value of the input control
  * @property {boolean} disabled - The disabled state of the input control
+ * @property {boolean} required - The required state of the input control
  * @property {string} description - The text for the description element that helps describe the input control
  * @property {string} supportPage - Name of the SUMO support page to link to.
  * @property {string} placeholder - Text to display when the input has no value.
@@ -21,7 +24,7 @@ import MozInputText from "chrome://global/content/elements/moz-input-text.mjs";
  * @property {string} ariaDescription - The aria-description text when there is no visible description.
  * @property {string} title - The title attribute, mapped onto the inner input.
  */
-export default class MozInputSearch extends MozInputText {
+export class MozInputSearch extends MozInputText {
   // The amount of milliseconds that we wait before firing the "search" event.
   static #searchDebounceDelayMs = 500;
 
@@ -50,7 +53,10 @@ export default class MozInputSearch extends MozInputText {
   }
 
   inputStylesTemplate() {
-    return html`${super.inputStylesTemplate()}`;
+    return html`<link
+      rel="stylesheet"
+      href="chrome://global/content/elements/moz-input-search.css"
+    />`;
   }
 
   handleInput(e) {
@@ -84,6 +90,7 @@ export default class MozInputSearch extends MozInputText {
         name=${this.name}
         .value=${this.value}
         ?disabled=${this.disabled || this.parentDisabled}
+        ?required=${this.required}
         accesskey=${ifDefined(this.accessKey)}
         placeholder=${ifDefined(this.placeholder)}
         aria-label=${ifDefined(this.ariaLabel ?? undefined)}

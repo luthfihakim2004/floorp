@@ -77,7 +77,7 @@ fun String.toShortUrl(publicSuffixList: PublicSuffixList): String {
             inputString.startsWith(FILE_PREFIX) ||
             uri.port !in -1..MAX_VALID_PORT
     ) {
-        return inputString
+        return URLStringUtils.toLosslessDisplayUrl(inputString)
     }
 
     if (
@@ -142,7 +142,10 @@ fun String.isExtensionUrl() = this.startsWith("moz-extension://")
 /** Checks if this String is a URL of a resource. */
 fun String.isResourceUrl() = this.startsWith("resource://")
 
-/** Appends `http` scheme if no scheme is present in this String. */
+/**
+ * Appends `http` scheme if no scheme is present in this String, and encodes the spaces after the authority of an HTTP/S
+ * URL as `%20`.
+ */
 fun String.toNormalizedUrl(): String {
     val s = this.sanitizeURL()
     // Most commonly we'll encounter http or https schemes.
@@ -150,7 +153,7 @@ fun String.toNormalizedUrl(): String {
     return if (!s.startsWith("http://") && !s.startsWith("https://")) {
         URLStringUtils.toNormalizedURL(s)
     } else {
-        s
+        URLStringUtils.encodeSpacesAfterAuthority(s)
     }
 }
 
@@ -479,4 +482,25 @@ internal fun String.extractBase6RawString(): String? {
         val (_, contentString) = it.destructured
         contentString
     }
+}
+
+/**
+ * Truncates the string from the middle if it exceeds [maxLength].
+ *
+ * @param maxLength The maximum length of the string.
+ * @param ellipsis The string to use as ellipsis, defaults to "…".
+ * @return The truncated string.
+ */
+fun String.truncateMiddle(maxLength: Int, ellipsis: String = "…"): String {
+    if (length <= maxLength) {
+        return this
+    }
+    if (maxLength <= ellipsis.length) {
+        return take(maxLength)
+    }
+
+    val half = (maxLength - ellipsis.length) / 2
+    val start = take(half)
+    val end = takeLast(maxLength - ellipsis.length - half)
+    return "$start$ellipsis$end"
 }

@@ -279,10 +279,90 @@ class TestTargetTasks(unittest.TestCase):
         """A missing label that isn't a test task keeps being reported as
         missing, rather than pulling in whatever shares its prefix."""
         method = get_method("try_tasks")
-        params = self._try_task_config_params(
-            ["fetch-clang-20"], MOZHARNESS_TEST_PATHS='{"suite": ["foo/bar"]}'
+        for tasks in (["fetch-clang-20"], ["fetch-clang"]):
+            for env in ({}, {"MOZHARNESS_TEST_PATHS": '{"suite": ["foo/bar"]}'}):
+                params = self._try_task_config_params(tasks, **env)
+                self.assertEqual(sorted(method(self.make_task_graph(), params, {})), [])
+
+    def test_try_task_config_renumbered_chunk_without_paths(self):
+        """A stale chunk label is recovered on a push that didn't restrict the
+        tests too, and there every chunk runs its own share of the suite."""
+        method = get_method("try_tasks")
+        params = self._try_task_config_params(["ddd-7"])
+        self.assertEqual(
+            sorted(method(self.make_task_graph(), params, {})), ["ddd-1", "ddd-2"]
         )
-        self.assertEqual(sorted(method(self.make_task_graph(), params, {})), [])
+
+    def test_try_task_config_unchunked_label_now_chunked(self):
+        """A task requested without a chunk suffix, because the graph the label
+        was picked from had it unchunked, is replaced by the chunks the decision
+        task split it into rather than dropped."""
+        method = get_method("try_tasks")
+        params = self._try_task_config_params(["ddd", "ddd-var"])
+        self.assertEqual(
+            sorted(method(self.make_task_graph(), params, {})),
+            ["ddd-1", "ddd-2", "ddd-var-1", "ddd-var-2"],
+        )
+
+    def test_try_task_config_unchunked_label_now_chunked_with_paths(self):
+        """Restricting the tests still keeps only the first chunk of a task the
+        taskgraph couldn't restrict to the requested paths."""
+        method = get_method("try_tasks")
+        paths = '{"suite": ["foo/bar"]}'
+        self.assertEqual(
+            sorted(
+                method(
+                    self.make_task_graph(),
+                    self._try_task_config_params(["ddd"], MOZHARNESS_TEST_PATHS=paths),
+                    {},
+                )
+            ),
+            ["ddd-1"],
+        )
+        self.assertEqual(
+            sorted(
+                method(
+                    self.make_task_graph(),
+                    self._try_task_config_params(["eee"], MOZHARNESS_TEST_PATHS=paths),
+                    {},
+                )
+            ),
+            ["eee-1", "eee-2"],
+        )
+
+    def test_try_task_config_unchunked_label_from_fuzzy(self):
+        """`mach try fuzzy` builds its task list with `taskgraph.fast` set,
+        which falls back to the hardcoded chunk counts, so it offers the
+        unchunked name of a task the decision task then splits into chunks."""
+        chunked = [
+            f"{platform}-{suite}-{chunk}"
+            for platform in (
+                "test-android-em-14-x86_64-lite/opt",
+                "test-android-em-14-x86_64/opt",
+            )
+            for suite in (
+                "geckoview-mochitest-media",
+                "geckoview-mochitest-media-nofis",
+                "geckoview-mochitest-media-nogpu",
+            )
+            for chunk in (1, 2)
+        ]
+        tg = TaskGraph(
+            {l: Task(kind="test", label=l, attributes={}, task={}) for l in chunked},
+            Graph(nodes=set(chunked), edges=set()),
+        )
+        method = get_method("try_tasks")
+        params = self._try_task_config_params(
+            sorted({l.rsplit("-", 1)[0] for l in chunked})
+        )
+        self.assertEqual(sorted(method(tg, params, {})), sorted(chunked))
+
+    def test_try_task_config_unknown_label(self):
+        """A label that names no task at all, chunked or not, is still reported
+        as missing."""
+        method = get_method("try_tasks")
+        params = self._try_task_config_params(["ddd-nosuchvariant", "a", "zzz"])
+        self.assertEqual(sorted(method(self.make_task_graph(), params, {})), ["a"])
 
     def test_try_task_config_absolute(self):
         "try_mode = try_task_config uses the try config with full task labels"
@@ -423,73 +503,6 @@ class TestTargetTasks(unittest.TestCase):
             },
             False,
             id="filter_regex_re_exclude_multiple",
-        ),
-        pytest.param(
-            "filter_unsupported_artifact_builds",
-            {
-                "task": Task(
-                    kind="test",
-                    label="a",
-                    attributes={"supports-artifact-builds": False},
-                    task={},
-                ),
-                "parameters": {
-                    "try_task_config": {
-                        "use-artifact-builds": False,
-                    },
-                },
-            },
-            True,
-            id="filter_unsupported_artifact_builds_no_artifact_builds",
-        ),
-        pytest.param(
-            "filter_unsupported_artifact_builds",
-            {
-                "task": Task(
-                    kind="test",
-                    label="a",
-                    attributes={"supports-artifact-builds": False},
-                    task={},
-                ),
-                "parameters": {
-                    "try_task_config": {
-                        "use-artifact-builds": True,
-                    },
-                },
-            },
-            False,
-            id="filter_unsupported_artifact_builds_removed",
-        ),
-        pytest.param(
-            "filter_unsupported_artifact_builds",
-            {
-                "task": Task(
-                    kind="test",
-                    label="a",
-                    attributes={"supports-artifact-builds": True},
-                    task={},
-                ),
-                "parameters": {
-                    "try_task_config": {
-                        "use-artifact-builds": True,
-                    },
-                },
-            },
-            True,
-            id="filter_unsupported_artifact_builds_not_removed",
-        ),
-        pytest.param(
-            "filter_unsupported_artifact_builds",
-            {
-                "task": Task(kind="test", label="a", attributes={}, task={}),
-                "parameters": {
-                    "try_task_config": {
-                        "use-artifact-builds": True,
-                    },
-                },
-            },
-            True,
-            id="filter_unsupported_artifact_builds_not_removed",
         ),
         pytest.param(
             "filter_for_repo_type",
@@ -688,6 +701,146 @@ def test_general_perf_testing_selects_safari_video_playback_latency():
     selected = _general_perf_selection(_raptor_task(vpl_safari, _MACOS))
 
     assert _raptor_label(vpl_safari, _MACOS) in selected
+
+
+def test_perftest_applink_profiling_selects_only_the_applink_tasks():
+    """Only the applink startup tasks are selected, the perftest transforms
+    then run them with profiling enabled."""
+    labels = target_tasks.APPLINK_PROFILING_LABELS | {
+        "perftest-android-hw-a55-aarch64-shippable-startup-fenix-homeview-startup",
+        "test-linux1804-64/opt-mochitest-1",
+    }
+    tasks = {
+        label: Task(kind="perftest", label=label, attributes={}, task={})
+        for label in labels
+    }
+    graph = TaskGraph(tasks, Graph(nodes=set(tasks), edges=set()))
+
+    selected = set(get_method("perftest-applink-profiling")(graph, {}, {}))
+
+    assert selected == target_tasks.APPLINK_PROFILING_LABELS
+
+
+def _autoland_task(label, kind="test", shippable=True, optimization=None):
+    return Task(
+        kind=kind,
+        label=label,
+        attributes={
+            "run_on_projects": ["trunk"],
+            "build_type": "opt",
+            "shippable": shippable,
+        },
+        task={},
+        optimization=optimization,
+    )
+
+
+AUTOLAND_TASKS = {
+    "talos-shippable": _autoland_task(
+        "talos-shippable", optimization={"perf-cadence-default": ["talos"]}
+    ),
+    "browsertime-shippable": _autoland_task(
+        "browsertime-shippable",
+        kind="browsertime",
+        optimization={"perf-cadence-backstop": None},
+    ),
+    "mochitest-shippable": _autoland_task(
+        "mochitest-shippable", optimization={"test": ["mochitest"]}
+    ),
+    "mochitest": _autoland_task(
+        "mochitest", shippable=False, optimization={"test": ["mochitest"]}
+    ),
+    "build-shippable": _autoland_task(
+        "build-shippable", kind="build", optimization={"build": ["firefox"]}
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "method,backstop,expected",
+    (
+        pytest.param(
+            "autoland_tasks",
+            False,
+            {"mochitest", "build-shippable"},
+            id="autoland_drops_shippable_tests_on_non_backstop",
+        ),
+        pytest.param(
+            "autoland_tasks",
+            True,
+            set(AUTOLAND_TASKS),
+            id="autoland_keeps_everything_on_backstop",
+        ),
+        pytest.param(
+            "autoland_perf_shadow_scheduler_tasks",
+            False,
+            {
+                "talos-shippable",
+                "browsertime-shippable",
+                "mochitest",
+                "build-shippable",
+            },
+            id="perf_shadow_scheduler_keeps_perf_tests_on_non_backstop",
+        ),
+        pytest.param(
+            "autoland_perf_shadow_scheduler_tasks",
+            True,
+            set(AUTOLAND_TASKS),
+            id="perf_shadow_scheduler_keeps_everything_on_backstop",
+        ),
+    ),
+)
+def test_autoland_target_tasks(method, backstop, expected):
+    graph = TaskGraph(AUTOLAND_TASKS, Graph(nodes=set(AUTOLAND_TASKS), edges=set()))
+    params = {
+        "project": "autoland",
+        "repository_type": "hg",
+        "hg_branch": "default",
+        "tasks_for": "hg-push",
+        "backstop": backstop,
+    }
+    assert set(get_method(method)(graph, params, {})) == expected
+
+
+@pytest.mark.parametrize(
+    "project,release_type,run_on_projects,expected",
+    (
+        pytest.param("pine", "nightly-pine", ["release"], True, id="pine"),
+        pytest.param(
+            "pine",
+            "nightly-pine",
+            ["mozilla-central-only"],
+            False,
+            id="pine_uses_own_run_on_projects",
+        ),
+        pytest.param("try", "nightly", ["mozilla-central-only"], True, id="try"),
+    ),
+)
+def test_desktop_nightly_filter_on_project_branches(
+    project, release_type, run_on_projects, expected
+):
+    task = Task(
+        kind="build",
+        label="build-macosx64-shippable/opt",
+        attributes={
+            "build_platform": "macosx64-shippable",
+            "shippable": True,
+            "shipping_product": "firefox",
+            "run_on_projects": run_on_projects,
+        },
+        task={},
+    )
+    params = {
+        "project": project,
+        "release_type": release_type,
+        "level": "3",
+        "repository_type": "hg",
+        "hg_branch": "default",
+    }
+    nightly_filter = target_tasks.make_desktop_nightly_filter(
+        {"macosx64-shippable"}, {"trust-domain": "gecko"}
+    )
+    assert nightly_filter(task, params) == expected
 
 
 if __name__ == "__main__":

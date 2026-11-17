@@ -423,8 +423,6 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
   bool IsHTMLLink(nsIURI** aURI) const;
 
   // HTML element methods
-  void Compact() { mAttrs.Compact(); }
-
   void UpdateEditableState(bool aNotify) override;
 
   bool ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
@@ -435,7 +433,7 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
   bool ParseBackgroundAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
                                 const nsAString& aValue, nsAttrValue& aResult);
 
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
+  bool IsNoNamespaceAttrMapped(const nsAtom* aAttribute) const override;
   nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
 
   /**
@@ -508,9 +506,6 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
    */
   static bool ParseImageAttribute(nsAtom* aAttribute, const nsAString& aString,
                                   nsAttrValue& aResult);
-
-  static bool ParseReferrerAttribute(const nsAString& aString,
-                                     nsAttrValue& aResult);
 
   /**
    * Convert a frameborder string to value (yes/no/1/0)
@@ -797,7 +792,7 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
   MOZ_CAN_RUN_SCRIPT void AfterSetPopoverAttr();
 
   mozilla::EventListenerManager* GetEventListenerManagerForAttr(
-      nsAtom* aAttrName, bool* aDefer) override;
+      nsAtom* aAttrName) override;
 
   /**
    * Handles dispatching a simulated click on `this` on space or enter.
@@ -835,7 +830,8 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
   }
 
   void SetHTMLAttr(nsAtom* aName, const nsAString& aValue) {
-    SetAttr(kNameSpaceID_None, aName, aValue, true);
+    SetAttr(kNameSpaceID_None, aName, aValue, true,
+            mozilla::dom::IsKnownNewAttr::No);
   }
   void SetHTMLAttr(nsAtom* aName, const nsAString& aValue,
                    mozilla::ErrorResult& aError) {
@@ -1121,6 +1117,10 @@ class nsGenericHTMLFormElement : public nsGenericHTMLElement {
 
   virtual mozilla::dom::HTMLFormElement* GetFormInternal() const {
     return nullptr;
+  }
+
+  mozilla::dom::HTMLFormElement* GetFormIfRegistered() const {
+    return HasFlag(ADDED_TO_FORM) ? GetFormInternal() : nullptr;
   }
 
   virtual mozilla::dom::HTMLFieldSetElement* GetFieldSetInternal() const {

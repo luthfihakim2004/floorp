@@ -8,7 +8,6 @@ import android.app.Activity
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
-import org.mozilla.fenix.onboarding.WidgetPinnedReceiver
 import org.mozilla.gecko.search.SearchWidgetProvider
 
 /**
@@ -22,8 +21,7 @@ fun maybeShowAddSearchWidgetPrompt(activity: Activity) {
     // We don't use canShowAddSearchWidgetPrompt here directly as lint does not pick on the version check.
     if (appWidgetManager.isRequestPinAppWidgetSupported) {
         val searchWidgetProvider = ComponentName(activity, SearchWidgetProvider::class.java)
-        val successCallback = WidgetPinnedReceiver.getPendingIntent(activity)
-        appWidgetManager.requestPinAppWidget(searchWidgetProvider, null, successCallback)
+        appWidgetManager.requestPinAppWidget(searchWidgetProvider, null, null)
     }
 }
 
@@ -38,7 +36,6 @@ fun maybeShowAddSearchWidgetPrompt(activity: Activity) {
 fun showAddSearchWidgetPromptIfSupported(context: Context) {
     val packageName = context.packageName
     val appWidgetManager = AppWidgetManager.getInstance(context)
-    val successCallback = WidgetPinnedReceiver.getPendingIntent(context)
 
     if (canShowAddSearchWidgetPrompt(appWidgetManager)) {
         val searchWidgetProvider =
@@ -46,9 +43,10 @@ fun showAddSearchWidgetPromptIfSupported(context: Context) {
                 packageName,
                 SearchWidgetProvider::class.java.name,
             )
-        appWidgetManager.requestPinAppWidget(searchWidgetProvider, null, successCallback)
+        appWidgetManager.requestPinAppWidget(searchWidgetProvider, null, null)
     }
 }
 
 /** Checks whether the device is capable of displaying the "add search widget" prompt. */
-fun canShowAddSearchWidgetPrompt(appWidgetManager: AppWidgetManager) = appWidgetManager.isRequestPinAppWidgetSupported
+fun canShowAddSearchWidgetPrompt(appWidgetManager: AppWidgetManager?) =
+    appWidgetManager?.isRequestPinAppWidgetSupported == true

@@ -19,6 +19,7 @@
 #include "cairo.h"
 #include "gfxWindowsPlatform.h"
 #include "gfxWindowsSurface.h"
+#include "gtest/MozGtestFriend.h"
 #include "mozilla/DataMutex.h"
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/EventForwards.h"
@@ -95,7 +96,6 @@ struct WindowStyles {
   static WindowStyles FromHWND(HWND);
 
   constexpr bool operator==(WindowStyles const& that) const = default;
-  constexpr bool operator!=(WindowStyles const& that) const = default;
 
   constexpr WindowStyles operator|(WindowStyles const& that) const {
     return WindowStyles{.style = style | that.style, .ex = ex | that.ex};
@@ -620,7 +620,7 @@ class nsWindow final : public nsIWidget {
    */
   void UserActivity();
 
-  DWORD WindowStyle();
+  DWORD WindowStyle() const;
   DWORD WindowExStyle();
 
   /**
@@ -676,6 +676,7 @@ class nsWindow final : public nsIWidget {
   bool NeedsToTrackWindowOcclusionState();
 
   void AsyncUpdateWorkspaceID();
+  FRIEND_TEST(WinWorkspaceID, HungQueryDoesNotBlockShutdown);
 
   // See bug 603793
   static bool HasBogusPopupsDropShadowOnMultiMonitor();
@@ -797,6 +798,19 @@ class nsWindow final : public nsIWidget {
   HICON mIconBig = nullptr;
   HWND mLastKillFocusWindow = nullptr;
   PlatformCompositorWidgetDelegate* mCompositorWidgetDelegate = nullptr;
+
+  // Whether this window's style includes a caption.
+  bool HasCaption() const;
+
+  struct ResizeMargins {
+    mozilla::LayoutDeviceIntCoord mHorizontal;
+    mozilla::LayoutDeviceIntCoord mVertical;
+  };
+  ResizeMargins DefaultResizeMargins(UINT aDpi) const;
+
+  // The distance by which this window's frame extends beyond its visible
+  // edges.
+  LayoutDeviceIntMargin ResizeBorderOverhang() const;
 
   LayoutDeviceIntMargin NonClientSizeMargin() const {
     return NonClientSizeMargin(mCustomNonClientMetrics.mOffset);
@@ -937,6 +951,10 @@ class nsWindow final : public nsIWidget {
       mWindowBtnRect;
 
   nsString mDesktopId MOZ_GUARDED_BY(mozilla::sMainThreadCapability);
+  bool mDesktopIdUpdatePending MOZ_GUARDED_BY(mozilla::sMainThreadCapability) =
+      false;
+  static uint32_t sDesktopIdRequestsInFlight;
+  static bool sDesktopIdHangForTesting;
 
   friend class nsWindowGfx;
 

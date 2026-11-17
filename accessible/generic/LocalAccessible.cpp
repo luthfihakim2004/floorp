@@ -7,7 +7,6 @@
 #include "AccIterator.h"
 #include "ApplicationAccessible.h"
 #include "CachedTableAccessible.h"
-#include "CssAltContent.h"
 #include "DocAccessible-inl.h"
 #include "EmbeddedObjCollector.h"
 #include "EventTree.h"
@@ -60,6 +59,7 @@
 #include "nsAtom.h"
 #include "nsComputedDOMStyle.h"
 #include "nsContainerFrame.h"
+#include "nsCoreUtils.h"
 #include "nsDisplayList.h"
 #include "nsEventShell.h"
 #include "nsFocusManager.h"
@@ -147,12 +147,12 @@ ENameValueFlag LocalAccessible::Name(nsString& aName) const {
     return eNameFromTooltip;
   }
 
-  if (auto cssAlt = CssAltContent(mContent)) {
+  if (Maybe<nsString> cssAlt = nsCoreUtils::GetCssAltContent(mContent)) {
     // This covers two cases:
     // 1. The CSS content property replaces the content of an element with an
     // image plus alt text.
     // 2. Alt text is provided for a pseudo-element image.
-    cssAlt.AppendToString(aName);
+    aName.Append(*cssAlt);
     return eNameOK;
   }
 
@@ -1589,6 +1589,32 @@ void LocalAccessible::DOMAttributeChanged(int32_t aNameSpaceID,
   // ARIA or XUL selection
   if ((mContent->IsXULElement() && aAttribute == nsGkAtoms::selected) ||
       aAttribute == nsGkAtoms::aria_selected) {
+    if (aAttribute == nsGkAtoms::aria_selected) {
+      const nsRoleMapEntry* roleMapEntry = ARIARoleMap();
+      if (!roleMapEntry && IsHTMLTableCell() && Role() == roles::GRID_CELL) {
+        // This is a <td> inside a role="grid"; see the similar case in
+        // ApplyARIAState.
+        roleMapEntry = aria::GetRoleMap(nsGkAtoms::gridcell);
+      }
+      if (roleMapEntry && roleMapEntry->IsSelectableIfDefined()) {
+        // For these roles, whether aria-selected is "defined" (present and
+        // neither empty nor "undefined") determines the selectable state.
+        // For other selectable roles (option, tab, treeitem, etc.), the
+        // selectable state doesn't depend on aria-selected's definedness, so
+        // don't fire this there.
+        const bool wasDefined =
+            aOldValue && !aOldValue->IsEmptyString() &&
+            !aOldValue->Equals(nsGkAtoms::_undefined, eCaseMatters);
+        const bool isDefined =
+            nsAccUtils::HasDefinedARIAToken(elm, nsGkAtoms::aria_selected);
+        if (wasDefined != isDefined) {
+          auto stateChangeEvent = MakeRefPtr<AccStateChangeEvent>(
+              this, states::SELECTABLE, isDefined);
+          mDoc->FireDelayedEvent(stateChangeEvent);
+        }
+      }
+    }
+
     LocalAccessible* widget = nsAccUtils::GetSelectableContainer(this, State());
     if (widget) {
       AccSelChangeEvent::SelChangeType selChangeType;
@@ -1875,7 +1901,7 @@ double LocalAccessible::CurValue() const {
   return checkValue;
 }
 
-bool LocalAccessible::SetCurValue(double aValue) { return false; }
+bool LocalAccessible::SetCurValue(double /*aValue*/) { return false; }
 
 role LocalAccessible::NativeRole() const { return roles::NOTHING; }
 
@@ -2581,6 +2607,9 @@ Relation LocalAccessible::RelationByType(RelationType aType) const {
     }
 
     case RelationType::ERRORMSG:
+      if (!(ExplicitState() & states::INVALID)) {
+        return Relation();
+      }
       return Relation(new AssociatedElementsIterator(
           mDoc, mContent, nsGkAtoms::aria_errormessage));
 
@@ -2611,7 +2640,7 @@ void LocalAccessible::DoCommand(uint32_t aActionIndex) const {
       }));
 }
 
-void LocalAccessible::DispatchClickEvent(uint32_t aActionIndex) const {
+void LocalAccessible::DispatchClickEvent(uint32_t /*aActionIndex*/) const {
   if (IsDefunct()) return;
   MOZ_ASSERT(mContent);
 
@@ -2907,6 +2936,12 @@ void LocalAccessible::BindToParent(LocalAccessible* aParent,
   } else {
     mContextFlags &= ~eHasDescriptionDependent;
   }
+  if (mParent->HasValueDependent() ||
+      nsAccUtils::ShouldFireValueChangeForDescendantChanges(mParent)) {
+    mContextFlags |= eHasValueDependent;
+  } else {
+    mContextFlags &= ~eHasValueDependent;
+  }
 
   // Add name/description dependent flags for dependent content once
   // a name/description provider is added to doc.
@@ -2971,7 +3006,7 @@ void LocalAccessible::UnbindFromParent() {
 
   delete mGroupInfo;
   mGroupInfo = nullptr;
-  mContextFlags &= ~eHasNameDependent & ~eInsideAlert;
+  mContextFlags &= ~eHasNameDependent & ~eHasValueDependent & ~eInsideAlert;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3605,10 +3640,8 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
       fields->SetAttribute(CacheKey::Tooltip, DeleteEntry());
     }
 
-    nsString cssAltContent;
-    if (auto cssAlt = CssAltContent(mContent)) {
-      cssAlt.AppendToString(cssAltContent);
-      fields->SetAttribute(CacheKey::CssAltContent, std::move(cssAltContent));
+    if (Maybe<nsString> cssAlt = nsCoreUtils::GetCssAltContent(mContent)) {
+      fields->SetAttribute(CacheKey::CssAltContent, std::move(*cssAlt));
     } else if (IsUpdatePush(CacheDomain::NameAndDescription)) {
       fields->SetAttribute(CacheKey::CssAltContent, DeleteEntry());
     }

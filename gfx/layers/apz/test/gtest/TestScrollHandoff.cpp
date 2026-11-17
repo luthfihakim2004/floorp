@@ -179,12 +179,7 @@ class APZCNestedFlingScrollHandoffTester : public APZCTreeManagerTester {
       const ScreenIntPoint& aStartPoint,
       std::initializer_list<int32_t> aXDeltas,
       std::initializer_list<int32_t> aYDeltas) {
-    APZEventResult result = TouchDown(subframeApzc, aStartPoint, mcc->Time());
-
-    // Allowed touch behaviours must be set after sending touch-start.
-    if (result.GetStatus() != nsEventStatus_eConsumeNoDefault) {
-      SetDefaultAllowedTouchBehavior(subframeApzc, result.mInputBlockId);
-    }
+    TouchDown(subframeApzc, aStartPoint, mcc->Time());
 
     const TimeDuration kTouchTimeDelta100Hz =
         TimeDuration::FromMilliseconds(10);
@@ -264,8 +259,8 @@ TEST_F(APZScrollHandoffTesterMock, OverscrollDropsDelta_Bug2046702) {
   SetScrollHandoff(layers[1], root);
   ModifyFrameMetrics(root, [](ScrollMetadata& aSm, FrameMetrics&) {
     OverscrollBehaviorInfo behavior;
-    behavior.mBehaviorX = OverscrollBehavior::None;
-    behavior.mBehaviorY = OverscrollBehavior::None;
+    behavior.mBehaviorX = StyleOverscrollBehavior::None;
+    behavior.mBehaviorY = StyleOverscrollBehavior::None;
     aSm.SetOverscrollBehavior(behavior);
   });
   registration = MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, mcc);
@@ -913,7 +908,7 @@ TEST_F(APZScrollHandoffTesterMock, WheelHandoffNonscrollable) {
   WidgetMouseEvent mouseEvent =
       mouseInput.ToWidgetEvent<WidgetMouseEvent>(nullptr);
   QueueMockHitResult(START_SCROLL_ID + 1);
-  ((APZInputBridge*)manager.get())->ReceiveInputEvent(mouseEvent);
+  ((APZBridge*)manager.get())->ReceiveInputEvent(mouseEvent);
 
   // Wheel downward should scroll the subframe.
   mcc->AdvanceByMillis(100);

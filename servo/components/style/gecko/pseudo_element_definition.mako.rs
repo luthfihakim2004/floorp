@@ -49,14 +49,10 @@ impl PseudoElement {
     /// Whether this pseudo-element is tree pseudo-element.
     #[inline]
     pub fn is_tree_pseudo_element(&self) -> bool {
-        match *self {
-            % for pseudo in PSEUDOS:
-            % if pseudo.name.startswith("-moz-tree-"):
-            ${pseudo_element_variant(pseudo)} => true,
-            % endif
-            % endfor
-            _ => false,
-        }
+        matches!(
+            *self,
+            ${" | ".join(capture(pseudo_element_variant, pseudo) for pseudo in PSEUDOS if pseudo.name.startswith("-moz-tree-"))}
+        )
     }
 
     #[inline]
@@ -163,6 +159,10 @@ impl PseudoElement {
             PseudoStyleType::${pseudo.capitalized} => functional_pseudo_parameter.map(|p| {
                 PseudoElement::${pseudo.capitalized}(PtNameAndClassSelector::from_name(p.0))
             }),
+            % elif pseudo.argument == "HighlightNameSelector":
+            PseudoStyleType::${pseudo.capitalized} => functional_pseudo_parameter.map(|p| {
+                PseudoElement::${pseudo.capitalized}(HighlightNameSelector::Name(p))
+            }),
             % else:
             <% assert pseudo.argument == "AtomIdent", f"Unhandled argument type {pseudo.argument}" %>
             PseudoStyleType::${pseudo.capitalized} => {
@@ -191,6 +191,8 @@ impl PseudoElement {
             % for pseudo in PSEUDOS:
             % if pseudo.argument == "PtNameAndClassSelector":
             PseudoElement::${pseudo.capitalized}(ref val) => Some(val.name()),
+            % elif pseudo.argument == "HighlightNameSelector":
+            PseudoElement::${pseudo.capitalized}(ref val) => val.name(),
             % elif pseudo.argument == "AtomIdent":
             PseudoElement::${pseudo.capitalized}(ref val) => Some(&val.0),
             % endif
@@ -206,7 +208,7 @@ impl PseudoElement {
         match *self {
             % for pseudo in PSEUDOS:
             % if pseudo.name.startswith("-moz-tree-"):
-            PseudoElement::${pseudo.capitalized}(ref args) => &args,
+            PseudoElement::${pseudo.capitalized}(ref args) => args,
             % endif
             % endfor
             _ => &[],
@@ -237,6 +239,10 @@ impl PseudoElement {
         }
         if let Some(p) = pseudo::get(name) {
             return Some(p.clone());
+        }
+        if name.eq_ignore_ascii_case("-webkit-input-placeholder") && crate::pref!("layout.css.webkit-input-placeholder.enabled") {
+            // TODO(emilio): When making unconditional, move to the map above.
+            return Some(PseudoElement::Placeholder);
         }
         if starts_with_ignore_ascii_case(name, "-moz-tree-") {
             return PseudoElement::tree_pseudo_element(name, Default::default())
@@ -287,6 +293,10 @@ impl PseudoElement {
             return false;
         }
 
+        if matches!(pseudo_selector, PseudoElement::Highlight(HighlightNameSelector::Universal)) {
+            return true;
+        }
+
         // Check named view transition pseudo-elements.
         self.matches_named_view_transition_pseudo_element(pseudo_selector, element)
     }
@@ -302,7 +312,7 @@ impl ToCss for PseudoElement {
                 let mut iter = args.iter();
                 if let Some(first) = iter.next() {
                     dest.write_char('(')?;
-                    serialize_atom_identifier(&first, dest)?;
+                    serialize_atom_identifier(first, dest)?;
                     for item in iter {
                         dest.write_str(", ")?;
                         serialize_atom_identifier(item, dest)?;

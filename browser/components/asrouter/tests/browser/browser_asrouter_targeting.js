@@ -8,10 +8,12 @@ ChromeUtils.defineESModuleGetters(this, {
   ASRouterTargeting: "resource:///modules/asrouter/ASRouterTargeting.sys.mjs",
   AttributionCode:
     "moz-src:///browser/components/attribution/AttributionCode.sys.mjs",
-  BrowserInitState: "resource:///modules/BrowserGlue.sys.mjs",
+  BrowserInitState: "moz-src:///browser/components/BrowserGlue.sys.mjs",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   BuiltInThemes: "resource:///modules/BuiltInThemes.sys.mjs",
   ClientID: "resource://gre/modules/ClientID.sys.mjs",
+  ExperimentAPI: "resource://nimbus/ExperimentAPI.sys.mjs",
+  FormHistory: "resource://gre/modules/FormHistory.sys.mjs",
   FxAccounts: "resource://gre/modules/FxAccounts.sys.mjs",
   HomePage: "resource:///modules/HomePage.sys.mjs",
   InfoBar: "resource:///modules/asrouter/InfoBar.sys.mjs",
@@ -21,13 +23,19 @@ ChromeUtils.defineESModuleGetters(this, {
   OnboardingMessageProvider:
     "resource:///modules/asrouter/OnboardingMessageProvider.sys.mjs",
   PanelTestProvider: "resource:///modules/asrouter/PanelTestProvider.sys.mjs",
+  PermissionTestUtils: "resource://testing-common/PermissionTestUtils.sys.mjs",
   PlacesTestUtils: "resource://testing-common/PlacesTestUtils.sys.mjs",
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
   ProfileAge: "resource://gre/modules/ProfileAge.sys.mjs",
+  PushService: "resource://gre/modules/PushService.sys.mjs",
   QueryCache: "resource:///modules/asrouter/ASRouterTargeting.sys.mjs",
   Region: "resource://gre/modules/Region.sys.mjs",
+  ReinstallCheck: "moz-src:///browser/components/ReinstallCheck.sys.mjs",
+  ResetProfile: "resource://gre/modules/ResetProfile.sys.mjs",
   SearchService: "moz-src:///toolkit/components/search/SearchService.sys.mjs",
+  DEFAULT_FORM_HISTORY_PARAM:
+    "moz-src:///toolkit/components/search/SearchSuggestionController.sys.mjs",
   SelectableProfileService:
     "resource:///modules/profiles/SelectableProfileService.sys.mjs",
   SessionStartup:
@@ -37,10 +45,12 @@ ChromeUtils.defineESModuleGetters(this, {
   Spotlight: "resource:///modules/asrouter/Spotlight.sys.mjs",
   TabNotes: "moz-src:///browser/components/tabnotes/TabNotes.sys.mjs",
   TargetingContext: "resource://messaging-system/targeting/Targeting.sys.mjs",
-  TaskbarTabs: "resource:///modules/taskbartabs/TaskbarTabs.sys.mjs",
-  TaskbarTabsPin: "resource:///modules/taskbartabs/TaskbarTabsPin.sys.mjs",
+  TaskbarTabs: "moz-src:///browser/components/taskbartabs/TaskbarTabs.sys.mjs",
+  TaskbarTabsPin:
+    "moz-src:///browser/components/taskbartabs/TaskbarTabsPin.sys.mjs",
   TelemetryEnvironment: "resource://gre/modules/TelemetryEnvironment.sys.mjs",
   TelemetrySession: "resource://gre/modules/TelemetrySession.sys.mjs",
+  WebPushTargeting: "resource:///modules/asrouter/ASRouterTargeting.sys.mjs",
 });
 
 const { DefaultBrowserCheck } = ChromeUtils.importESModule(
@@ -357,6 +367,83 @@ add_task(async function check_canCreateSelectableProfiles() {
   await SpecialPowers.popPrefEnv();
 });
 
+add_task(async function check_canResetProfile() {
+  const sandbox = sinon.createSandbox();
+  const resetSupported = sandbox.stub(ResetProfile, "resetSupported");
+
+  resetSupported.returns(true);
+  is(
+    await ASRouterTargeting.Environment.canResetProfile,
+    true,
+    "should be true when the profile supports being reset"
+  );
+
+  const message = { id: "foo", targeting: "canResetProfile" };
+  is(
+    await ASRouterTargeting.findMatchingMessage({ messages: [message] }),
+    message,
+    "should select the right item by canResetProfile"
+  );
+
+  resetSupported.returns(false);
+  is(
+    await ASRouterTargeting.Environment.canResetProfile,
+    false,
+    "should be false when the profile doesn't support being reset"
+  );
+
+  sandbox.restore();
+});
+
+add_task(async function check_profileLastUse() {
+  is(
+    await ASRouterTargeting.Environment.profileLastUse,
+    Math.max(
+      Services.appinfo.replacedLockTime,
+      Services.prefs.userPrefsFileLastModifiedAtStartup
+    ),
+    "should be the most recent lock file and prefs.js timestamps"
+  );
+
+  const message = {
+    id: "foo",
+    targeting: "profileLastUse <= currentDate|date",
+  };
+  is(
+    await ASRouterTargeting.findMatchingMessage({ messages: [message] }),
+    message,
+    "should select correct item by profileLastUse"
+  );
+});
+
+add_task(async function check_isFirefoxReinstalled() {
+  const sandbox = sinon.createSandbox();
+  const wasReinstalled = sandbox.stub(ReinstallCheck, "wasReinstalled");
+
+  wasReinstalled.get(() => true);
+  is(
+    await ASRouterTargeting.Environment.isFirefoxReinstalled,
+    true,
+    "should be true when a reinstall was detected"
+  );
+
+  const message = { id: "foo", targeting: "isFirefoxReinstalled" };
+  is(
+    await ASRouterTargeting.findMatchingMessage({ messages: [message] }),
+    message,
+    "should select correct item by isFirefoxReinstalled"
+  );
+
+  wasReinstalled.get(() => false);
+  is(
+    await ASRouterTargeting.Environment.isFirefoxReinstalled,
+    false,
+    "should be false when no reinstall was detected"
+  );
+
+  sandbox.restore();
+});
+
 add_task(async function check_hasSelectableProfiles() {
   is(
     await ASRouterTargeting.Environment.hasSelectableProfiles,
@@ -511,6 +598,147 @@ add_task(async function check_totalBookmarksCount() {
   await PlacesUtils.bookmarks.remove(bookmark.guid);
 });
 
+add_task(async function check_allowedNotificationOrigins() {
+  const message = { id: "foo", targeting: "allowedNotificationOrigins > 0" };
+
+  ok(
+    !(await ASRouterTargeting.findMatchingMessage({ messages: [message] })),
+    "Should not match when no origin is allowed"
+  );
+
+  PermissionTestUtils.add(
+    "https://example.com",
+    "desktop-notification",
+    Services.perms.DENY_ACTION
+  );
+  ok(
+    !(await ASRouterTargeting.findMatchingMessage({ messages: [message] })),
+    "Should not count a blocked origin"
+  );
+
+  PermissionTestUtils.add(
+    "https://example.org",
+    "desktop-notification",
+    Services.perms.ALLOW_ACTION
+  );
+  is(
+    await ASRouterTargeting.findMatchingMessage({ messages: [message] }),
+    message,
+    "Should match once an origin is allowed"
+  );
+  is(
+    await ASRouterTargeting.Environment.allowedNotificationOrigins,
+    1,
+    "Should count the allowed origin but not the blocked one"
+  );
+
+  // Cleanup
+  PermissionTestUtils.remove("https://example.com", "desktop-notification");
+  PermissionTestUtils.remove("https://example.org", "desktop-notification");
+});
+
+add_task(async function check_activeWebPushSubscriptionCount() {
+  const COUNT_PREF = "messaging-system.activeWebPushSubscriptionCount";
+  const message = {
+    id: "foo",
+    targeting: "activeWebPushSubscriptionCount > 0",
+  };
+  const sandbox = sinon.createSandbox();
+  const isReady = sandbox.stub(PushService, "isReady").get(() => true);
+  const getAll = sandbox.stub(PushService, "getAllUnexpiredNonSystem");
+  await SpecialPowers.pushPrefEnv({ set: [[COUNT_PREF, 5]] });
+
+  getAll.resolves([]);
+  is(
+    await ASRouterTargeting.Environment.activeWebPushSubscriptionCount,
+    0,
+    "Should be 0 when there are no subscriptions"
+  );
+  ok(
+    !(await ASRouterTargeting.findMatchingMessage({ messages: [message] })),
+    "Should not match when there are no subscriptions"
+  );
+  is(
+    Services.prefs.getIntPref(COUNT_PREF),
+    0,
+    "Should save the count once push is ready"
+  );
+
+  getAll.resolves([{}, {}]);
+  is(
+    await ASRouterTargeting.Environment.activeWebPushSubscriptionCount,
+    2,
+    "Should return the count from the push service"
+  );
+  is(
+    await ASRouterTargeting.findMatchingMessage({ messages: [message] }),
+    message,
+    "Should match when there is an active subscription"
+  );
+  is(Services.prefs.getIntPref(COUNT_PREF), 2, "Should save the new count");
+
+  getAll.resetHistory();
+  isReady.get(() => false);
+  is(
+    await ASRouterTargeting.Environment.activeWebPushSubscriptionCount,
+    2,
+    "Should return the saved count before push is ready"
+  );
+  ok(getAll.notCalled, "Should not query push before it is ready");
+
+  await SpecialPowers.pushPrefEnv({ set: [["dom.push.enabled", false]] });
+  is(
+    await ASRouterTargeting.Environment.activeWebPushSubscriptionCount,
+    0,
+    "Should be 0 when push is disabled, regardless of the saved count"
+  );
+  await SpecialPowers.popPrefEnv();
+
+  isReady.get(() => true);
+  getAll.rejects(new Error("the push database is broken"));
+  await Assert.rejects(
+    ASRouterTargeting.Environment.activeWebPushSubscriptionCount,
+    /the push database is broken/,
+    "An unexpected failure propagates instead of being reported as 0"
+  );
+  is(
+    Services.prefs.getIntPref(COUNT_PREF),
+    2,
+    "A failure should not overwrite the saved count"
+  );
+
+  await SpecialPowers.popPrefEnv();
+  sandbox.restore();
+});
+
+add_task(async function check_pushServiceReady_updatesWebPushRecipes() {
+  const sandbox = sinon.createSandbox();
+  const ready = sandbox.stub(PushService, "ready").resolves();
+  const stub = sandbox
+    .stub(ExperimentAPI, "updateRecipesForFeatures")
+    .resolves();
+
+  await WebPushTargeting.init();
+
+  Assert.ok(ready.calledOnce, "Waits for the push service to be ready");
+  Assert.ok(
+    stub.calledOnceWithExactly("push-service-activated", ["includeForWebPush"]),
+    "Nimbus re-evaluates the web push recipes when the push service starts"
+  );
+
+  stub.resetHistory();
+  ready.resetHistory();
+  await SpecialPowers.pushPrefEnv({ set: [["dom.push.enabled", false]] });
+  await WebPushTargeting.init();
+  Assert.ok(
+    ready.notCalled && stub.notCalled,
+    "Does nothing when push is disabled"
+  );
+  await SpecialPowers.popPrefEnv();
+
+  sandbox.restore();
+});
+
 add_task(async function check_needsUpdate() {
   QueryCache.queries.CheckBrowserNeedsUpdate.setUp(true);
 
@@ -601,8 +829,75 @@ add_task(async function checksearchEngines() {
   );
 });
 
+add_task(async function check_recentSearchCount() {
+  const FIELDNAME = DEFAULT_FORM_HISTORY_PARAM;
+  const message = { id: "foo", targeting: "recentSearchCount > 2" };
+
+  const clear = () =>
+    FormHistory.update({ op: "remove", fieldname: FIELDNAME });
+  await clear();
+  registerCleanupFunction(clear);
+
+  is(
+    await ASRouterTargeting.Environment.recentSearchCount,
+    0,
+    "recentSearchCount should be 0 with no search history"
+  );
+
+  await FormHistory.update([
+    { op: "bump", fieldname: FIELDNAME, value: "cats" },
+    { op: "bump", fieldname: FIELDNAME, value: "dogs" },
+    { op: "bump", fieldname: FIELDNAME, value: "weather" },
+  ]);
+
+  is(
+    await ASRouterTargeting.Environment.recentSearchCount,
+    3,
+    "recentSearchCount should count the three distinct recent searches"
+  );
+  is(
+    await ASRouterTargeting.findMatchingMessage({ messages: [message] }),
+    message,
+    "Should select message because recentSearchCount > 2"
+  );
+
+  // Since form history dedupes, repeating a term should not increase the count.
+  await FormHistory.update({ op: "bump", fieldname: FIELDNAME, value: "cats" });
+  is(
+    await ASRouterTargeting.Environment.recentSearchCount,
+    3,
+    "Repeated searches of the same term should not increase the count"
+  );
+
+  // Exclude searches outside the recency window (28 days). Use a margin
+  // beyond the window rather than landing exactly on the cutoff, since the
+  // getter computes its own Date.now()-based cutoff a moment later and an
+  // exact boundary value can land on either side of it. The lastUsed time
+  // is in microseconds, so we need to multiply by 1000 to get the correct
+  // time.
+  const RECENT_SEARCH_WINDOW_DAYS = 28;
+  const STALE_MARGIN_DAYS = 1;
+  const oldLastUsed =
+    (Date.now() -
+      (RECENT_SEARCH_WINDOW_DAYS + STALE_MARGIN_DAYS) * 24 * 60 * 60 * 1000) *
+    1000;
+  await FormHistory.update({
+    op: "add",
+    fieldname: FIELDNAME,
+    value: "stale",
+    lastUsed: oldLastUsed,
+  });
+  is(
+    await ASRouterTargeting.Environment.recentSearchCount,
+    3,
+    "Searches older than the recency window should be excluded"
+  );
+
+  await clear();
+});
+
 add_task(async function checkisDefaultBrowser() {
-  const expected = ShellService.isDefaultBrowser();
+  const expected = await ShellService.isDefaultBrowserAsync();
   const result = await ASRouterTargeting.Environment.isDefaultBrowser;
   is(typeof result, "boolean", "isDefaultBrowser should be a boolean value");
   is(
@@ -619,6 +914,38 @@ add_task(async function checkisDefaultBrowser() {
     message,
     "should select correct item by isDefaultBrowser"
   );
+});
+
+add_task(async function checkHasAttemptedSetDefault() {
+  is(
+    await ASRouterTargeting.Environment.hasAttemptedSetDefault,
+    false,
+    "hasAttemptedSetDefault should be false before the attempt"
+  );
+  const shellStub = sinon
+    .stub(ShellService, "shellService")
+    .value({ setDefaultBrowser: () => {} });
+  const guidanceStub = sinon
+    .stub(ShellService, "_maybeShowSetDefaultGuidanceNotification")
+    .resolves();
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.shell.setDefaultBrowserUserChoice", false]],
+  });
+
+  try {
+    await ShellService.setDefaultBrowser(false);
+
+    is(
+      await ASRouterTargeting.Environment.hasAttemptedSetDefault,
+      true,
+      "hasAttemptedSetDefault should be true once after the attempt"
+    );
+  } finally {
+    ShellService._attemptedSetDefaultThisSession = false;
+    guidanceStub.restore();
+    shellStub.restore();
+    await SpecialPowers.popPrefEnv();
+  }
 });
 
 add_task(async function checkisDefaultHandler_pdf() {
@@ -1190,7 +1517,7 @@ add_task(async function check_current_tab_installed_as_web_app() {
   // By default, Taskbar Tabs will try and pin this to the taskbar, but we
   // don't want to do that in this test.
   const sandbox = sinon.createSandbox();
-  sandbox.stub(TaskbarTabsPin, "pinTaskbarTab");
+  sandbox.stub(TaskbarTabsPin, "pinTaskbarTab").resolves({});
   sandbox.stub(TaskbarTabsPin, "unpinTaskbarTab");
 
   const kUri = "https://example.com";
@@ -1233,7 +1560,7 @@ add_task(async function check_current_tab_installed_as_web_app() {
 
 add_task(async function check_installed_web_apps_count() {
   const sandbox = sinon.createSandbox();
-  sandbox.stub(TaskbarTabsPin, "pinTaskbarTab");
+  sandbox.stub(TaskbarTabsPin, "pinTaskbarTab").resolves({});
   sandbox.stub(TaskbarTabsPin, "unpinTaskbarTab");
 
   const kUri1 = "https://example.com";
@@ -1324,6 +1651,36 @@ add_task(async function check_has_active_ai_window_true() {
 
   win.document.documentElement.removeAttribute("ai-window");
   await BrowserTestUtils.closeWindow(win);
+  await SpecialPowers.popPrefEnv();
+});
+
+add_task(async function check_is_auto_tab_grouping_available() {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.ml.enable", true],
+      ["browser.ml.checkForMemory", false],
+      ["browser.smartwindow.autoTabGrouping.enabled", true],
+      ["browser.smartwindow.autoTabGrouping.supportedLocales", "en"],
+    ],
+  });
+  is(
+    await ASRouterTargeting.Environment.isAutoTabGroupingAvailable,
+    true,
+    "Organize Tabs is available in a supported locale"
+  );
+
+  // Only French is supported here, and tests run in en-US, so the feature is
+  // unavailable.
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.smartwindow.autoTabGrouping.supportedLocales", "fr"]],
+  });
+  is(
+    await ASRouterTargeting.Environment.isAutoTabGroupingAvailable,
+    false,
+    "Organize Tabs is unavailable when the app locale is not supported"
+  );
+
+  await SpecialPowers.popPrefEnv();
   await SpecialPowers.popPrefEnv();
 });
 
@@ -1852,6 +2209,25 @@ add_task(async function test_alltabsButtonAreaType_removed() {
   CustomizableUI.reset();
 });
 
+add_task(async function test_forgetButtonAreaType_default() {
+  is(
+    await ASRouterTargeting.Environment.forgetButtonAreaType,
+    null,
+    "Should return null while the button is in the palette"
+  );
+});
+
+add_task(async function test_forgetButtonAreaType_added() {
+  CustomizableUI.addWidgetToArea("panic-button", CustomizableUI.AREA_NAVBAR);
+
+  is(
+    await ASRouterTargeting.Environment.forgetButtonAreaType,
+    "toolbar",
+    "Should return name of container once the button has been added"
+  );
+  CustomizableUI.reset();
+});
+
 add_task(async function test_creditCardsSaved() {
   await SpecialPowers.pushPrefEnv({
     set: [
@@ -2356,7 +2732,7 @@ add_task(async function check_totalSearches() {
 });
 
 add_task(async function checkisDefaultBrowserUncached() {
-  const expected = ShellService.isDefaultBrowser();
+  const expected = await ShellService.isDefaultBrowserAsync();
   const result = await ASRouterTargeting.Environment.isDefaultBrowserUncached;
   is(
     typeof result,

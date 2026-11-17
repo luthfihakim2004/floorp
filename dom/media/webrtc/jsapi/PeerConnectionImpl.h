@@ -484,6 +484,12 @@ class PeerConnectionImpl final
   RefPtr<dom::RTCRtpTransceiver> GetTransceiver(
       const std::string& aTransceiverId);
 
+  // See JsepSession::LocalOfferedRecvParamsChanged.
+  bool LocalOfferedRecvParamsChanged(const std::string& aMid) {
+    MOZ_ASSERT(NS_IsMainThread());
+    return mJsepSession && mJsepSession->LocalOfferedRecvParamsChanged(aMid);
+  }
+
   // Gets the RTC Signaling State of the JSEP session
   dom::RTCSignalingState GetSignalingState() const;
 
@@ -815,10 +821,11 @@ class PeerConnectionImpl final
   void RestoreStateForRollback();
   std::set<RefPtr<dom::RTCDtlsTransport>> GetActiveTransports() const;
 
-  // Activate ICE transports at the conclusion of offer/answer,
-  // or when rollback occurs.
-  nsresult UpdateTransports(const JsepSession& aSession,
-                            const bool forceIceTcp);
+  // Activate ICE transports at the conclusion of offer/answer, or when
+  // rollback occurs. A provisional answer activates its transports too, but
+  // does not remove the ones it leaves unused.
+  nsresult UpdateTransports(const JsepSession& aSession, const bool forceIceTcp,
+                            const bool aProvisional);
 
   void ResetStunAddrsForIceRestart() { mStunAddrs.Clear(); }
 
@@ -890,6 +897,11 @@ class PeerConnectionImpl final
   // Set if prefs dictate that we should force the use of a web proxy.
   bool mForceProxy = false;
 
+  // Set if the window's Connection Allowlists block WebRTC, which makes every
+  // local address, remote candidate and ICE server administratively
+  // prohibited.
+  bool mBlockedByConnectionAllowlists = false;
+
   // Used to cancel incoming stun addrs response
   RefPtr<net::StunAddrsRequestChild> mStunAddrsRequest;
 
@@ -919,9 +931,9 @@ class PeerConnectionImpl final
   // web-compat stopgap
   bool mAllowOldSetParameters = false;
 
-  // Used to store the mDNS hostnames that we have queried
+  // For candidates that require an mDNS query before they can be used.
   struct PendingIceCandidate {
-    std::vector<std::string> mTokenizedCandidate;
+    std::string mCandidate;
     std::string mTransportId;
     std::string mUfrag;
   };

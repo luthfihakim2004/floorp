@@ -90,15 +90,17 @@ static bool IsLockdownModeEnabled() {
 #endif
 
 static void InitJSEngine() {
-#if defined(ENABLE_WASM_SIMD) && \
+#if defined(ENABLE_JIT_SIMD) && \
     (defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_X86))
   // Update static engine preferences, such as AVX, before
   // `JS_InitWithFailureDiagnostic` is called.
   JS::SetAVXEnabled(mozilla::StaticPrefs::javascript_options_wasm_simd_avx());
 #endif
 
-  if (XRE_IsParentProcess() &&
-      mozilla::StaticPrefs::javascript_options_main_process_disable_jit()) {
+  if (XRE_IsParentProcess()
+          ? mozilla::StaticPrefs::javascript_options_main_process_disable_jit()
+          : mozilla::StaticPrefs::
+                javascript_options_other_processes_disable_jit()) {
     JS::DisableJitBackend();
   }
 #ifdef XP_IOS

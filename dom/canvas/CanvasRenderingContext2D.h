@@ -55,6 +55,7 @@ using CanvasImageSource =
     HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrOffscreenCanvasOrImageBitmapOrVideoFrame;
 class ImageBitmap;
 class ImageData;
+struct ImageDataSettings;
 class UTF8StringOrCanvasGradientOrCanvasPattern;
 class OwningUTF8StringOrCanvasGradientOrCanvasPattern;
 class TextMetrics;
@@ -107,6 +108,7 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
   void OnMemoryPressure() override;
   void OnBeforePaintTransaction() override;
   void OnDidPaintTransaction() override;
+  void OnWindowDestroy() override;
   layers::PersistentBufferProvider* GetBufferProvider() override;
 
   Maybe<layers::SurfaceDescriptor> GetFrontBuffer(
@@ -263,12 +265,14 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
     DrawImage(aImage, aSx, aSy, aSw, aSh, aDx, aDy, aDw, aDh, 6, aError);
   }
 
-  already_AddRefed<ImageData> CreateImageData(JSContext*, int32_t aSw,
-                                              int32_t aSh, ErrorResult&);
+  already_AddRefed<ImageData> CreateImageData(
+      JSContext*, int32_t aSw, int32_t aSh, const ImageDataSettings& aSettings,
+      ErrorResult&);
   already_AddRefed<ImageData> CreateImageData(JSContext*, ImageData&,
                                               ErrorResult&);
   already_AddRefed<ImageData> GetImageData(JSContext*, int32_t aSx, int32_t aSy,
                                            int32_t aSw, int32_t aSh,
+                                           const ImageDataSettings& aSettings,
                                            nsIPrincipal& aSubjectPrincipal,
                                            ErrorResult&);
   void PutImageData(ImageData&, int32_t aDx, int32_t aDy, ErrorResult&);
@@ -496,6 +500,8 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
   int32_t GetWidth() override { return GetSize().width; }
   int32_t GetHeight() override { return GetSize().height; }
 
+  PredefinedColorSpace GetColorSpace() const { return mColorSpace; }
+
   // nsICanvasRenderingContextInternal
   /**
    * Gets the pres shell from either the canvas element or the doc shell
@@ -542,8 +548,8 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
     Redraw(ToRect(aR));
     return NS_OK;
   }
-  NS_IMETHOD SetContextOptions(JSContext* aCx, JS::Handle<JS::Value> aOptions,
-                               ErrorResult& aRvForDictionaryInit) override;
+  NS_IMETHOD SetContextOptions(
+      const CanvasRenderingContextOptions& aOptions) override;
 
   /**
    * An abstract base class to be implemented by callers wanting to be notified
@@ -744,9 +750,6 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
    */
   void TransformCurrentPath(const mozilla::gfx::Matrix& aTransform);
 
-  // Report the fillRule has changed.
-  void FillRuleChanged();
-
   /**
    * Check if the target is in an error state. Functions that may need to
    * access the transform or clip state with or without a target should call
@@ -870,6 +873,9 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
   // Member vars
   int32_t mWidth, mHeight;
 
+  // Determines the context colorspace
+  PredefinedColorSpace mColorSpace;
+
   // This is true when the canvas is valid, but of zero size, this requires
   // specific behavior on some operations.
   bool mZero;
@@ -974,12 +980,15 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
    */
   RefPtr<mozilla::gfx::Path> mPath;
   RefPtr<mozilla::gfx::PathBuilder> mPathBuilder;
+  RefPtr<mozilla::gfx::PathBuilder> mRecycledPathBuilder;
   mozilla::gfx::BackendType mPathType = mozilla::gfx::BackendType::NONE;
   bool mPathPruned = false;
   mozilla::gfx::Matrix mPathTransform;
   bool mPathTransformDirty = false;
 
   void FlushPathTransform();
+  already_AddRefed<mozilla::gfx::PathBuilder> CreateOrRecyclePathBuilder(
+      mozilla::gfx::FillRule aFillRule);
 
   /**
    * Number of times we've invalidated before calling redraw
@@ -1008,6 +1017,10 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
    * drawn with a filter.
    */
   bool NeedToApplyFilter() {
+    // Avoid trying to update filter state if no filter chain has ever been set.
+    if (CurrentState().filterChain.IsEmpty()) {
+      return false;
+    }
     return EnsureUpdatedFilter().mPrimitives.Length() > 0;
   }
 
@@ -1076,7 +1089,7 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
     ContextState() = default;
     ContextState(const ContextState& aOther);
 
-    ~ContextState() = default;
+    ~ContextState();
 
     void SetColorStyle(Style aWhichStyle, nscolor aColor);
     void SetPatternStyle(Style aWhichStyle, CanvasPattern* aPat);
@@ -1174,12 +1187,10 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
 
   AutoTArray<ContextState, 3> mStyleStack;
 
-  inline ContextState& CurrentState() {
-    return mStyleStack[mStyleStack.Length() - 1];
-  }
+  inline ContextState& CurrentState() { return mStyleStack.LastElement(); }
 
   inline const ContextState& CurrentState() const {
-    return mStyleStack[mStyleStack.Length() - 1];
+    return mStyleStack.LastElement();
   }
 
   inline const ContextState& PreviousState() const {
@@ -1310,8 +1321,6 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
   ColorStyleCache mColorStyleCache;
 
   ColorStyleCacheEntry ParseColorSlow(const nsACString&);
-
-  mozilla::gfx::PaletteCache mPaletteCache;
 
   friend class CanvasGeneralPattern;
   friend class AdjustedTarget;

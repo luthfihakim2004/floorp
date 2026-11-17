@@ -9,8 +9,12 @@
  * its own copy of the module).
  */
 
-import * as UrlbarContentUtils from "chrome://browser/content/urlbar/UrlbarContentUtils.mjs";
+import { UrlbarContentUtils } from "chrome://browser/content/urlbar/UrlbarContentUtils.mjs";
 import UrlbarPrefs from "chrome://browser/content/urlbar/UrlbarContentPrefs.mjs";
+
+/**
+ * @import { URILoadingHelper } from "resource:///modules/URILoadingHelper.sys.mjs"
+ */
 
 /**
  * @typedef {object} LocalSearchMode
@@ -29,7 +33,8 @@ import UrlbarPrefs from "chrome://browser/content/urlbar/UrlbarContentPrefs.mjs"
  *   The telemetry label for recording searches in this mode.
  * @property {string} uiLabel
  *   The L10n ID to use for the UI label.
- *   Has a value and an accesskey attribute.
+ * @property {string} [keyId]
+ *   The ID of the browser window's <key> element that enters the search mode.
  */
 
 /**
@@ -54,6 +59,11 @@ import UrlbarPrefs from "chrome://browser/content/urlbar/UrlbarContentPrefs.mjs"
  * @typedef {{urlLoad: UrlLoad, engineSearch?: never} |
  *           {engineSearch: EngineSearchLoad, urlLoad?: never}} UrlbarLoadRequest
  *  Either a URL or an engine search.
+ */
+
+/**
+ * @typedef {Parameters<URILoadingHelper["openLinkIn"]>[3]} LoadURLParams
+ *   The parameters related to how and where the result will be opened.
  */
 
 /**
@@ -97,16 +107,19 @@ export const UrlbarShared = {
    * chrome-only, and unlike `instanceof` it holds for a value from another
    * global; a content realm compares against its own interface object.
    *
+   * @template T
    * @param {any} value
    *   The value to check.
-   * @param {object} iface
+   * @param {{ new (...args: any[]): T; isInstance?: (obj: any) => boolean }} iface
    *   The interface, e.g. `KeyboardEvent`.
-   * @returns {boolean}
+   * @returns {value is T}
    */
-  isInstance:
-    typeof ChromeUtils != "undefined"
-      ? (value, iface) => iface.isInstance(value)
-      : (value, iface) => value instanceof iface,
+  isInstance(value, iface) {
+    if (typeof ChromeUtils != "undefined") {
+      return iface.isInstance(value);
+    }
+    return value instanceof iface;
+  },
 
   // REGEXP_ constants are duplicated from UrlUtils.sys.mjs
   // Regex matching on whitespaces.
@@ -138,6 +151,25 @@ export const UrlbarShared = {
     // provider's parent-side engagement side effect, which lands after an actor
     // round-trip on the message path.
     PROVIDER_ENGAGEMENT: "onProviderEngagement",
+  }),
+
+  /**
+   * The UrlbarChildController/UrlbarInput/UrlbarView methods the parent may
+   * invoke over the `UrlbarChild` actor as an `InvokeContentAction` message.
+   *
+   * The parameters of these functions MUST be structured-clonable.
+   */
+  INVOKABLE_CONTENT_ACTIONS: Object.freeze({
+    controller: /** @type {const} */ (["notifyFromWire", "updateEngineStore"]),
+    input: /** @type {const} */ (["search", "setValue", "startQuery"]),
+    view: /** @type {const} */ ([
+      "acknowledgeFeedback",
+      "clearL10nCache",
+      "clearTopSitesCache",
+      "close",
+      "startTail150",
+      "updateResultMenuCommands",
+    ]),
   }),
 
   TOKEN_TYPE: Object.freeze({
@@ -336,6 +368,10 @@ export const UrlbarShared = {
     DEFAULT: "chrome://global/skin/icons/defaultFavicon.svg",
   },
 
+  // Size in `px` of icons in top-pick rows in the view. Should be kept in sync
+  // with the `--urlbarview-top-pick-icon-size` CSS variable.
+  TOP_PICK_ICON_SIZE: 58,
+
   // The number of results by which Page Up/Down move the selection.
   PAGE_UP_DOWN_DELTA: 5,
 
@@ -417,7 +453,7 @@ export const UrlbarShared = {
         icon: "chrome://browser/skin/bookmark.svg",
         pref: "shortcuts.bookmarks",
         telemetryLabel: "bookmarks",
-        uiLabel: "urlbar-searchmode-bookmarks3",
+        uiLabel: "urlbar-searchmode-bookmarks4",
       },
       {
         source: this.RESULT_SOURCE.TABS,
@@ -425,7 +461,8 @@ export const UrlbarShared = {
         icon: "chrome://browser/skin/open-tabs.svg",
         pref: "shortcuts.tabs",
         telemetryLabel: "tabs",
-        uiLabel: "urlbar-searchmode-tabs3",
+        uiLabel: "urlbar-searchmode-tabs4",
+        keyId: "key_searchTabs",
       },
       {
         source: this.RESULT_SOURCE.HISTORY,
@@ -433,7 +470,7 @@ export const UrlbarShared = {
         icon: "chrome://browser/skin/history.svg",
         pref: "shortcuts.history",
         telemetryLabel: "history",
-        uiLabel: "urlbar-searchmode-history3",
+        uiLabel: "urlbar-searchmode-history4",
       },
       {
         source: this.RESULT_SOURCE.ACTIONS,
@@ -441,7 +478,7 @@ export const UrlbarShared = {
         icon: "chrome://browser/skin/lightning-bolt.svg",
         pref: "shortcuts.actions",
         telemetryLabel: "actions",
-        uiLabel: "urlbar-searchmode-actions3",
+        uiLabel: "urlbar-searchmode-actions4",
       },
     ]);
   },
@@ -650,17 +687,22 @@ export const UrlbarShared = {
   },
 
   /**
-   * Whether a SAP is an input dedicated to querying a search engine -- the
+   * The SAPs that are inputs dedicated to querying a search engine -- the
    * toolbar search bar and New Tab's -- as opposed to the address bar and its
    * variants, whose search also covers history and bookmarks.
+   */
+  SEARCHBAR_SAPS: ["searchbar", "newtab_searchbar"],
+
+  /**
+   * Whether a SAP is one of SEARCHBAR_SAPS.
    *
-   * @param {string} sapName
+   * @param {UrlbarSapName} sapName
    *   The SAP name to check.
    * @returns {boolean}
    *   Whether the SAP is dedicated to search-engine queries.
    */
   isSearchbarSAP(sapName) {
-    return sapName == "searchbar" || sapName == "newtab_searchbar";
+    return this.SEARCHBAR_SAPS.includes(sapName);
   },
 
   /**
@@ -668,13 +710,44 @@ export const UrlbarShared = {
    * disambiguates input in a bar that also takes an address, so a search bar
    * searches whatever the pref says.
    *
-   * @param {string} sapName
+   * @param {UrlbarSapName} sapName
    *   The SAP name to check.
    * @returns {boolean}
    *   Whether a keyword search is enabled.
    */
   keywordEnabled(sapName) {
     return this.isSearchbarSAP(sapName) || UrlbarPrefs.get("keyword.enabled");
+  },
+
+  /**
+   * Whether a string that is a URL may be navigated to. The toolbar search bar
+   * only searches; the address bar and New Tab's bar both navigate.
+   *
+   * @param {UrlbarSapName} sapName
+   *   The SAP name to check.
+   * @returns {boolean}
+   *   Whether navigation is enabled.
+   */
+  navigationEnabled(sapName) {
+    return sapName != "searchbar";
+  },
+
+  /**
+   * Whether a string that is a URL may be navigated to in an engine search
+   * mode, as it would be outside of search mode, rather than searched for. This
+   * holds where the unified search button is always available.
+   *
+   * @param {UrlbarSapName} sapName
+   *   The SAP name to check.
+   * @returns {boolean}
+   *   Whether navigation is enabled in an engine search mode.
+   */
+  navigationInSearchModeEnabled(sapName) {
+    return (
+      this.navigationEnabled(sapName) &&
+      (this.isSearchbarSAP(sapName) ||
+        UrlbarPrefs.get("unifiedSearchButton.always"))
+    );
   },
 
   /**
@@ -1246,8 +1319,8 @@ export const UrlbarShared = {
             return "tab_to_search";
           case "UrlbarProviderUnitConversion":
             return "unit";
-          case "UrlbarProviderQuickSuggestContextualOptIn":
-            return "fxsuggest_data_sharing_opt_in";
+          case "UrlbarProviderAddonsShortcutMoved":
+            return "addons_shortcut_moved";
           case "UrlbarProviderGlobalActions":
           case "UrlbarProviderActionsSearchMode":
             return "action";
@@ -1606,25 +1679,25 @@ export const UrlbarShared = {
       if (Math.abs(daysAgo) <= 1) {
         // "yesterday", "today", or "tomorrow"
         dateFormatType = this.DATE_FORMAT_TYPE.YESTERDAY_TODAY_TOMORROW;
-        formattedDate = new Intl.RelativeTimeFormat(undefined, {
+        formattedDate = new Intl.RelativeTimeFormat(this.locale(), {
           numeric: "auto",
         }).format(-daysAgo, "day");
       } else if (0 < daysAgo && daysAgo <= 6) {
         // <= 6 days ago: "{n} days ago"
         dateFormatType = this.DATE_FORMAT_TYPE.DAYS_WEEKS_MONTHS_AGO;
-        formattedDate = new Intl.RelativeTimeFormat(undefined, {
+        formattedDate = new Intl.RelativeTimeFormat(this.locale(), {
           numeric: "always",
         }).format(-daysAgo, "day");
       } else if (0 < weeksAgo && (weeksAgo <= 4 || monthsAgo == 0)) {
         // <= 4 weeks ago or same month: "{n} weeks ago"
         dateFormatType = this.DATE_FORMAT_TYPE.DAYS_WEEKS_MONTHS_AGO;
-        formattedDate = new Intl.RelativeTimeFormat(undefined, {
+        formattedDate = new Intl.RelativeTimeFormat(this.locale(), {
           numeric: "always",
         }).format(-weeksAgo, "week");
       } else if (0 < monthsAgo && monthsAgo <= 11) {
         // <= 11 months ago: "{n} months ago"
         dateFormatType = this.DATE_FORMAT_TYPE.DAYS_WEEKS_MONTHS_AGO;
-        formattedDate = new Intl.RelativeTimeFormat(undefined, {
+        formattedDate = new Intl.RelativeTimeFormat(this.locale(), {
           numeric: "always",
         }).format(-monthsAgo, "month");
       }
@@ -1652,7 +1725,7 @@ export const UrlbarShared = {
           opts.year = "numeric";
         }
       }
-      formattedDate = new Intl.DateTimeFormat(undefined, opts).format(date);
+      formattedDate = new Intl.DateTimeFormat(this.locale(), opts).format(date);
       dateFormatType = this.DATE_FORMAT_TYPE.ABSOLUTE;
       isRelative = false;
     }
@@ -1660,7 +1733,7 @@ export const UrlbarShared = {
     // Now format the time.
     let formattedTime;
     if (isFuture) {
-      formattedTime = new Intl.DateTimeFormat(undefined, {
+      formattedTime = new Intl.DateTimeFormat(this.locale(), {
         hour: "numeric",
         minute: "numeric",
         timeZoneName: includeTimeZone ? "short" : undefined,
@@ -1719,7 +1792,7 @@ export const UrlbarShared = {
    *   in the previous calendar month, this value will be 1, and so on.
    */
   parseDate(date) {
-    let zonedNow = this._zonedDateTimeISO();
+    let zonedNow = this.zonedDateTimeISO();
     let zonedDate = date.toTemporalInstant().toZonedDateTimeISO(zonedNow);
     let isFuture = Temporal.ZonedDateTime.compare(zonedNow, zonedDate) < 0;
 
@@ -1758,8 +1831,15 @@ export const UrlbarShared = {
 
   // Thin wrapper around `zonedDateTimeISO` so that tests can easily set a mock
   // "now" date and time. See `UrlbarTestUtils.stubNowZonedDateTime()`.
-  _zonedDateTimeISO() {
+  zonedDateTimeISO() {
     return Temporal.Now.zonedDateTimeISO();
+  },
+
+  // Thin wrapper around the locale passed to `Intl` formatters so that tests can
+  // force a locale that doesn't depend on the OS regional settings. `undefined`
+  // means the default locale. See `UrlbarTestUtils.stubLocale()`.
+  locale() {
+    return undefined;
   },
 
   // Thin wrapper around `getWeekInfo` so that tests can easily set a mock first
@@ -1778,6 +1858,21 @@ export const UrlbarShared = {
       this.__firstDayOfWeek ??= 7;
     }
     return this.__firstDayOfWeek;
+  },
+
+  /**
+   * Escapes a string for safe interpolation into an HTML document.
+   *
+   * @param {string} s
+   * @returns {string}
+   */
+  escapeHtmlEntities(s) {
+    return (s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   },
 };
 

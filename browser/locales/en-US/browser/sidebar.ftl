@@ -8,6 +8,9 @@ menu-view-genai-chat =
 menu-view-contextual-password-manager =
   .label = Passwords
 
+menu-view-resource-monitor =
+  .label = Resource Monitor
+
 # Label for the Open Tabs entry in the View > Sidebars menu bar menu.
 # "Open Tabs" is a noun phrase referring to the tabs currently open in
 # the browser, not an instruction to open tabs.
@@ -56,6 +59,15 @@ sidebar-history-sort-option-date-and-site =
   .label = Date and site
 sidebar-history-sort-option-last-visited =
   .label = Last visited
+sidebar-history-sort-option-most-visited =
+  .label = Most visited
+
+# Promo shown in the history panel to people with a new profile, inviting them
+# to import their browsing history from another browser.
+sidebar-history-import-promo =
+  .message = Missing something? Grab history from another browser.
+sidebar-history-import-promo-button =
+  .label = Import to { -brand-short-name }
 
 ## Labels for sidebar search
 
@@ -208,6 +220,8 @@ sidebar-menu-customize-label =
   .label = Customize sidebar
 sidebar-menu-contextual-password-manager-label =
   .label = Passwords
+sidebar-menu-resource-monitor-label =
+  .label = Resource monitor
 sidebar-menu-more-tools-label =
   .label = More tools
 

@@ -2147,6 +2147,10 @@ class BaseAssembler : public GenericAssembler {
   }
 
   void testl_ir(int32_t rhs, RegisterID lhs) {
+    if (rhs == -1) {
+      testl_rr(lhs, lhs);
+      return;
+    }
     // If the mask fits in an 8-bit immediate, we can use testb with an
     // 8-bit subreg.
     if (CAN_ZERO_EXTEND_8_32(rhs) && HasSubregL(lhs)) {
@@ -2215,6 +2219,10 @@ class BaseAssembler : public GenericAssembler {
   }
 
   void testb_ir(int32_t rhs, RegisterID lhs) {
+    if ((rhs & 0xff) == 0xff && lhs != rax) {
+      testb_rr(lhs, lhs);
+      return;
+    }
     spew(currentOffset(), "testb      $0x%x, %s", uint32_t(rhs),
          GPReg8Name(lhs));
     if (lhs == rax) {
@@ -4713,6 +4721,16 @@ class BaseAssembler : public GenericAssembler {
   void mfence() {
     spew(currentOffset(), "mfence");
     m_formatter.twoByteOp(OP_FENCE, (RegisterID)0, 0b110);
+  }
+
+  void ldmxcsr_mr(int32_t offset, RegisterID base) {
+    spew(currentOffset(), "ldmxcsr    " MEM_ob, ADDR_ob(offset, base));
+    m_formatter.twoByteOp(OP_FENCE, offset, base, 0b010);
+  }
+
+  void stmxcsr_rm(int32_t offset, RegisterID base) {
+    spew(currentOffset(), "stmxcsr    " MEM_ob, ADDR_ob(offset, base));
+    m_formatter.twoByteOp(OP_FENCE, offset, base, 0b011);
   }
 
   void pause() {

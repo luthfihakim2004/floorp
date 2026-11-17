@@ -4,6 +4,7 @@
 
 package org.mozilla.fenix.share
 
+import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipDescription
@@ -22,12 +23,8 @@ import androidx.annotation.RequiresApi
 import androidx.annotation.VisibleForTesting
 import androidx.core.net.toUri
 import androidx.navigation.NavController
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import mozilla.components.concept.engine.prompt.ShareData
 import mozilla.components.concept.sync.Device
@@ -94,9 +91,9 @@ interface ShareController {
  * @param sentFromFirefoxManager Instance of [SentFromFirefoxManager] to facilitate "Sent from" nimbus experiment.
  * @param navController [NavController] used for navigation.
  * @param recentAppsStorage Instance of [RecentAppsStorage] for storing and retrieving the most recent apps.
- * @param viewLifecycleScope [CoroutineScope] used for retrieving the most recent apps in the background.
- * @param mainDispatcher Dispatcher for executing tasks on the Main thread.
- * @param ioDispatcher Dispatcher for executing I/O-bound tasks, like updating local storage.
+ * @param scope [CoroutineScope] used for retrieving the most recent apps in the background.
+ * @param applicationScope [CoroutineScope] tied to the application lifetime, used for operations that must outlive the
+ *   share fragment (e.g. sending tabs to devices after the fragment is dismissed).
  * @param fxaEntrypoint The entrypoint if we need to authenticate, it will be reported in telemetry.
  * @param dismiss Callback signalling sharing can be closed.
  */
@@ -112,9 +109,8 @@ class DefaultShareController(
     private val sentFromFirefoxManager: SentFromFirefoxManager,
     private val navController: NavController,
     private val recentAppsStorage: RecentAppsStorage,
-    private val viewLifecycleScope: CoroutineScope,
-    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val scope: CoroutineScope,
+    private val applicationScope: CoroutineScope,
     private val fxaEntrypoint: FxAEntryPoint = FenixFxAEntryPoint.ShareMenu,
     private val dismiss: (ShareController.Result) -> Unit,
 ) : ShareController {
@@ -145,7 +141,7 @@ class DefaultShareController(
             return
         }
 
-        viewLifecycleScope.launch(ioDispatcher) {
+        scope.launch {
             recentAppsStorage.updateRecentApp(app.activityName)
         }
 
@@ -223,13 +219,11 @@ class DefaultShareController(
      * @param destination List of device IDs to share tabs with.
      * @param shareOperation Operation to be executed for actually sharing tabs.
      */
-    @OptIn(DelicateCoroutinesApi::class) // GlobalScope usage
     private fun shareToDevicesWithRetry(
         destination: List<String>,
         shareOperation: () -> Deferred<Boolean>,
     ) {
-        // Use GlobalScope to allow the continuation of this method even if the share fragment is closed.
-        GlobalScope.launch(mainDispatcher) {
+        applicationScope.launch {
             val result =
                 if (shareOperation.invoke().await()) {
                     showSuccess(destination)
@@ -290,6 +284,7 @@ class DefaultShareController(
     internal fun getShareSubject() =
         shareSubject ?: shareData.filterNot { it.title.isNullOrEmpty() }.joinToString(", ") { it.title.toString() }
 
+    @SuppressLint("InlinedApi")
     private fun copyClipboard() {
         val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clipData = ClipData.newPlainText(getShareSubject(), getShareText())

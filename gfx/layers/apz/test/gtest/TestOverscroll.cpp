@@ -174,10 +174,7 @@ TEST_F(APZCOverscrollTester, OverScroll_Bug1152051b) {
   // to schedule a new one since we're still overscrolled. We don't pan because
   // panning can trigger functions that clear the overscroll animation state
   // in other ways.
-  APZEventResult result = TouchDown(apzc, ScreenIntPoint(10, 10), mcc->Time());
-  if (result.GetStatus() != nsEventStatus_eConsumeNoDefault) {
-    SetDefaultAllowedTouchBehavior(apzc, result.mInputBlockId);
-  }
+  TouchDown(apzc, ScreenIntPoint(10, 10), mcc->Time());
   TouchUp(apzc, ScreenIntPoint(10, 10), mcc->Time());
 
   // Sample the second overscroll animation to its end.
@@ -1325,7 +1322,7 @@ TEST_F(APZCOverscrollTester, OverscrollByPanGesturesInterruptedByReflowZoom) {
                            ScreenIntPoint(5, 5), ScreenPoint(0, -2),
                            MODIFIER_CONTROL);
   WidgetWheelEvent wheelEvent = panInput.ToWidgetEvent(nullptr);
-  EXPECT_FALSE(APZInputBridge::ActionForWheelEvent(&wheelEvent).isSome());
+  EXPECT_FALSE(APZBridge::ActionForWheelEvent(&wheelEvent).isSome());
 
   ScrollableLayerGuid rootGuid = CreateSimpleRootScrollableForWebRender();
   RefPtr<AsyncPanZoomController> apzc =
@@ -2344,7 +2341,6 @@ TEST_F(APZCOverscrollTester, NoResetTouchInputStateCalled) {
 
   ScreenIntPoint touchPoint(5, 5);
   APZEventResult result = TouchDown(apzc, touchPoint, mcc->Time());
-  SetDefaultAllowedTouchBehavior(apzc, result.mInputBlockId);
   apzc->ContentReceivedInputBlock(result.mInputBlockId,
                                   /*aPreventDefault=*/true);
 
@@ -2381,7 +2377,6 @@ TEST_F(APZCOverscrollTester, ResetTouchInputStateJustOnce) {
 
   ScreenIntPoint touchPoint(5, 5);
   APZEventResult result = TouchDown(apzc, touchPoint, mcc->Time());
-  SetDefaultAllowedTouchBehavior(apzc, result.mInputBlockId);
   apzc->ContentReceivedInputBlock(result.mInputBlockId,
                                   /*aPreventDefault=*/true);
 

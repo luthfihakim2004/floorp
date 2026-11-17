@@ -16,6 +16,13 @@ const { MODEL_FEATURES } = ChromeUtils.importESModule(
   "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs"
 );
 
+// Resume pills only show when resume cards are off.
+add_setup(async function () {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.smartwindow.resumeCards.enabled", false]],
+  });
+});
+
 async function dispatchSmartbarCommit(browser, value, action) {
   await SpecialPowers.spawn(browser, [value, action], async (val, act) => {
     const aiWindow = await ContentTaskUtils.waitForCondition(
@@ -398,6 +405,33 @@ add_task(async function test_resume_prompt_click_starter_type_telemetry() {
   }
 });
 
+add_task(async function test_dismiss_telemetry() {
+  const sb = sinon.createSandbox();
+  try {
+    Services.fog.testResetFOG();
+
+    await testResumeActivityClick(sb, async ({ browser }) => {
+      const conversationId = await getConversationId(browser);
+      const dismissButton = await getDismissButton(browser);
+      dismissButton.click();
+
+      const events = await TestUtils.waitForCondition(
+        () => Glean.smartWindow.quickPromptDismissed.testGetValue(),
+        "Wait for quick prompt dismissed event"
+      );
+
+      Assert.equal(events.length, 1, "One prompt dismissed event was recorded");
+      Assert.equal(
+        events[0].extra.chat_id,
+        conversationId,
+        "Dismissed event includes the conversation id"
+      );
+    });
+  } finally {
+    sb.restore();
+  }
+});
+
 add_task(async function test_fullpage_resume_starters_displayed_telemetry() {
   const sb = sinon.createSandbox();
   let win;
@@ -571,7 +605,10 @@ add_task(async function test_get_page_content_telemetry() {
     Services.fog.testResetFOG();
     const getPageContentStub = sb
       .stub(GetPageContent, "getPageContent")
-      .resolves(["abc", "defg"]);
+      .resolves([
+        { url: "https://example.com/", ok: true, content: "abc" },
+        { url: "https://example.com/", ok: true, content: "defg" },
+      ]);
 
     await withServer(
       {

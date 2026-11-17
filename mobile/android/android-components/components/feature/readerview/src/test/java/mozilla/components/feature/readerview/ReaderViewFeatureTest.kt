@@ -24,9 +24,6 @@ import mozilla.components.browser.state.state.createTab
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.Engine
 import mozilla.components.concept.engine.EngineSession
-import mozilla.components.concept.engine.pageextraction.ContentParams
-import mozilla.components.concept.engine.pageextraction.PageExtractionError
-import mozilla.components.concept.engine.pageextraction.PageMetadata
 import mozilla.components.concept.engine.webextension.MessageHandler
 import mozilla.components.concept.engine.webextension.Port
 import mozilla.components.concept.engine.webextension.WebExtension
@@ -185,9 +182,8 @@ class ReaderViewFeatureTest {
         runTest(testDispatcher) {
             val view: ReaderViewControlsView = mock()
             val feature = spy(ReaderViewFeature(testContext, mock(), BrowserStore(), view))
-            val isListenToPageEnabled = false
 
-            feature.showControls(isListenToPageEnabled)
+            feature.showControls()
 
             verify(view).setColorScheme(any())
             verify(view).setFont(any())
@@ -503,6 +499,94 @@ class ReaderViewFeatureTest {
         }
 
     @Test
+    fun `GIVEN a color scheme override WHEN reader view is shown THEN the reader url uses the override`() {
+        val engine: Engine = mock()
+        val engineSession: EngineSession = mock()
+        val tab = createTab(url = "https://www.mozilla.org", id = "test-tab", engineSession = engineSession)
+        val store =
+            BrowserStore(
+                initialState = BrowserState(tabs = listOf(tab), selectedTabId = tab.id),
+                middleware = listOf(captureActionsMiddleware) + EngineMiddleware.create(engine),
+            )
+
+        val readerViewFeature =
+            ReaderViewFeature(
+                testContext,
+                engine,
+                store,
+                mock(),
+                testDispatcher,
+                { "bbbbf5ce-3b0f-4f74-8a1f-986d89bffea7" },
+            )
+        readerViewFeature.readerBaseUrl = "moz-extension://012345/"
+        readerViewFeature.colorSchemeOverride = ReaderViewFeature.ColorScheme.DARK
+        readerViewFeature.showReaderView()
+
+        captureActionsMiddleware.assertFirstAction(EngineAction.LoadUrlAction::class) { action ->
+            assertEquals(
+                "moz-extension://012345/readerview.html?url=https%3A%2F%2Fwww.mozilla.org" +
+                    "&id=bbbbf5ce-3b0f-4f74-8a1f-986d89bffea7&colorScheme=dark",
+                action.url,
+            )
+        }
+    }
+
+    @Test
+    fun `GIVEN a reader page is displayed WHEN a color scheme override is set THEN it is sent to the web extension`() {
+        val port = mock<Port>()
+        val message = argumentCaptor<JSONObject>()
+
+        val readerViewFeature = prepareFeatureForTest(readerActivePort = port)
+
+        readerViewFeature.colorSchemeOverride = ReaderViewFeature.ColorScheme.DARK
+
+        assertEquals(ReaderViewFeature.ColorScheme.DARK, readerViewFeature.colorSchemeOverride)
+        verify(port, times(1)).postMessage(message.capture())
+        assertEquals(ReaderViewFeature.ACTION_SET_COLOR_SCHEME, message.value[ReaderViewFeature.ACTION_MESSAGE_KEY])
+        assertEquals(ReaderViewFeature.ColorScheme.DARK.name, message.value[ReaderViewFeature.ACTION_VALUE])
+
+        // Setting to the same value should not cause another message to be sent
+        readerViewFeature.colorSchemeOverride = ReaderViewFeature.ColorScheme.DARK
+        verify(port, times(1)).postMessage(message.capture())
+    }
+
+    @Test
+    fun `GIVEN a color scheme override WHEN the user changes the color scheme THEN it persists but is not applied`() {
+        val port = mock<Port>()
+
+        val readerViewFeature = prepareFeatureForTest(readerActivePort = port)
+        val prefs = testContext.getSharedPreferences(ReaderViewFeature.SHARED_PREF_NAME, Context.MODE_PRIVATE)
+        readerViewFeature.colorSchemeOverride = ReaderViewFeature.ColorScheme.DARK
+        verify(port, times(1)).postMessage(any())
+
+        readerViewFeature.config.colorScheme = ReaderViewFeature.ColorScheme.SEPIA
+
+        assertEquals(
+            ReaderViewFeature.ColorScheme.SEPIA.name,
+            prefs.getString(ReaderViewFeature.COLOR_SCHEME_KEY, null),
+        )
+        assertEquals(ReaderViewFeature.ColorScheme.DARK, readerViewFeature.config.colorScheme)
+        verify(port, times(1)).postMessage(any())
+    }
+
+    @Test
+    fun `GIVEN a color scheme override WHEN it is cleared THEN the user color scheme is sent to the web extension`() {
+        val port = mock<Port>()
+        val message = argumentCaptor<JSONObject>()
+
+        val readerViewFeature = prepareFeatureForTest(readerActivePort = port)
+        readerViewFeature.config.colorScheme = ReaderViewFeature.ColorScheme.SEPIA
+        readerViewFeature.colorSchemeOverride = ReaderViewFeature.ColorScheme.DARK
+
+        readerViewFeature.colorSchemeOverride = null
+
+        assertEquals(ReaderViewFeature.ColorScheme.SEPIA, readerViewFeature.config.colorScheme)
+        verify(port, times(3)).postMessage(message.capture())
+        assertEquals(ReaderViewFeature.ACTION_SET_COLOR_SCHEME, message.value[ReaderViewFeature.ACTION_MESSAGE_KEY])
+        assertEquals(ReaderViewFeature.ColorScheme.SEPIA.name, message.value[ReaderViewFeature.ACTION_VALUE])
+    }
+
+    @Test
     fun `font type config change persists and is sent to web extension`() =
         runTest(testDispatcher) {
             val port = mock<Port>()
@@ -720,237 +804,6 @@ class ReaderViewFeatureTest {
             assertEquals(ReaderViewFeature.ACTION_SHOW, message.allValues[1][ReaderViewFeature.ACTION_MESSAGE_KEY])
         }
 
-    @Test
-    fun `onListenClicked fetches metadata and content`() =
-        runTest(testDispatcher) {
-            var result: Result<ListenResult>? = null
-            val engineSession: EngineSession = mock()
-            val feature =
-                prepareFeatureForTest(
-                    engineSession = engineSession,
-                    onListenClicked = { result = it },
-                )
-
-            val metadata =
-                PageMetadata(
-                    structuredDataTypes = emptyList(),
-                    wordCount = 100,
-                    language = "en",
-                    isReaderable = true,
-                )
-            val content = "Article content"
-
-            feature.handleListenClicked()
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            val metadataResult = argumentCaptor<(PageMetadata) -> Unit>()
-            verify(engineSession).getPageMetadata(metadataResult.capture(), any())
-            metadataResult.value.invoke(metadata)
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            val contentParams = argumentCaptor<ContentParams>()
-            val contentResult = argumentCaptor<(String) -> Unit>()
-            verify(engineSession).getPageContent(contentParams.capture(), contentResult.capture(), any())
-
-            assertEquals(false, contentParams.value.removeBoilerplate)
-            contentResult.value.invoke(content)
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            assertNotNull(result)
-            assertTrue(result.isSuccess)
-            assertEquals(content, result.getOrNull()?.text)
-            assertEquals("en", result.getOrNull()?.language)
-        }
-
-    @Test
-    fun `onListenClicked handles metadata exception`() =
-        runTest(testDispatcher) {
-            var result: Result<ListenResult>? = null
-            val engineSession: EngineSession = mock()
-            val feature =
-                prepareFeatureForTest(
-                    engineSession = engineSession,
-                    onListenClicked = { result = it },
-                )
-
-            val exception = RuntimeException("Metadata failed")
-
-            feature.handleListenClicked()
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            val metadataException = argumentCaptor<(Throwable) -> Unit>()
-            verify(engineSession).getPageMetadata(any(), metadataException.capture())
-            metadataException.value.invoke(exception)
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            assertNotNull(result)
-            assertTrue(result.isFailure)
-            assertEquals(exception.message, result.exceptionOrNull()?.message)
-        }
-
-    @Test
-    fun `onListenClicked handles content exception`() =
-        runTest(testDispatcher) {
-            var result: Result<ListenResult>? = null
-            val engineSession: EngineSession = mock()
-            val feature =
-                prepareFeatureForTest(
-                    engineSession = engineSession,
-                    onListenClicked = { result = it },
-                )
-
-            val metadata =
-                PageMetadata(
-                    structuredDataTypes = emptyList(),
-                    wordCount = 100,
-                    language = "en",
-                    isReaderable = true,
-                )
-            val exception = RuntimeException("Content failed")
-
-            feature.handleListenClicked()
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            val metadataResult = argumentCaptor<(PageMetadata) -> Unit>()
-            verify(engineSession).getPageMetadata(metadataResult.capture(), any())
-            metadataResult.value.invoke(metadata)
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            val contentException = argumentCaptor<(Throwable) -> Unit>()
-            verify(engineSession).getPageContent(any(), any(), contentException.capture())
-            contentException.value.invoke(exception)
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            assertNotNull(result)
-            assertTrue(result.isFailure)
-            assertEquals(exception.message, result.exceptionOrNull()?.message)
-        }
-
-    @Test
-    fun `onListenClicked aborts if tab changes during metadata extraction`() =
-        runTest(testDispatcher) {
-            var result: Result<ListenResult>? = null
-            val engineSession: EngineSession = mock()
-            val store =
-                BrowserStore(
-                    BrowserState(
-                        tabs =
-                            listOf(
-                                createTab("https://www.mozilla.org", id = "tab-1"),
-                                createTab("https://www.google.com", id = "tab-2"),
-                            )
-                    )
-                )
-            store.dispatch(TabListAction.SelectTabAction("tab-1"))
-            store.dispatch(EngineAction.LinkEngineSessionAction("tab-1", engineSession))
-
-            val feature =
-                ReaderViewFeature(
-                    testContext,
-                    mock(),
-                    store,
-                    mock(),
-                    testDispatcher,
-                    onListenClicked = { result = it },
-                )
-            feature.start()
-
-            feature.handleListenClicked()
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            val metadataResult = argumentCaptor<(PageMetadata) -> Unit>()
-            verify(engineSession).getPageMetadata(metadataResult.capture(), any())
-
-            store.dispatch(TabListAction.SelectTabAction("tab-2"))
-
-            metadataResult.value.invoke(PageMetadata(emptyList(), 100, "en", true))
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            verify(engineSession, never()).getPageContent(any(), any(), any())
-            assertNull(result)
-        }
-
-    @Test
-    fun `onListenClicked aborts if tab changes during content extraction`() =
-        runTest(testDispatcher) {
-            var result: Result<ListenResult>? = null
-            val engineSession: EngineSession = mock()
-            val store =
-                BrowserStore(
-                    BrowserState(
-                        tabs =
-                            listOf(
-                                createTab("https://www.mozilla.org", id = "tab-1"),
-                                createTab("https://www.google.com", id = "tab-2"),
-                            )
-                    )
-                )
-            store.dispatch(TabListAction.SelectTabAction("tab-1"))
-            store.dispatch(EngineAction.LinkEngineSessionAction("tab-1", engineSession))
-
-            val feature =
-                ReaderViewFeature(
-                    testContext,
-                    mock(),
-                    store,
-                    mock(),
-                    testDispatcher,
-                    onListenClicked = { result = it },
-                )
-            feature.start()
-
-            feature.handleListenClicked()
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            val metadataResult = argumentCaptor<(PageMetadata) -> Unit>()
-            verify(engineSession).getPageMetadata(metadataResult.capture(), any())
-            metadataResult.value.invoke(PageMetadata(emptyList(), 100, "en", true))
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            val contentResult = argumentCaptor<(String) -> Unit>()
-            verify(engineSession).getPageContent(any(), contentResult.capture(), any())
-
-            store.dispatch(TabListAction.SelectTabAction("tab-2"))
-
-            contentResult.value.invoke("Article content")
-            testDispatcher.scheduler.advanceUntilIdle()
-
-            assertNull(result)
-        }
-
-    @Test
-    fun `onListenClicked handles PageExtractionError types`() =
-        runTest(testDispatcher) {
-            val errors =
-                listOf(
-                    PageExtractionError.UnexpectedNull(),
-                    PageExtractionError.MalformedResult(),
-                    PageExtractionError.UnknownError(null),
-                )
-
-            for (error in errors) {
-                var result: Result<ListenResult>? = null
-                val engineSession: EngineSession = mock()
-                val feature =
-                    prepareFeatureForTest(
-                        engineSession = engineSession,
-                        onListenClicked = { result = it },
-                    )
-
-                feature.handleListenClicked()
-                testDispatcher.scheduler.advanceUntilIdle()
-
-                val metadataException = argumentCaptor<(Throwable) -> Unit>()
-                verify(engineSession).getPageMetadata(any(), metadataException.capture())
-                metadataException.value.invoke(error)
-                testDispatcher.scheduler.advanceUntilIdle()
-
-                assertNotNull(result)
-                assertTrue(result.isFailure)
-                assertEquals(error.message, result.exceptionOrNull()?.message)
-            }
-        }
-
     private fun prepareFeatureForTest(
         contentPort: Port? = null,
         readerActivePort: Port? = null,
@@ -958,7 +811,6 @@ class ReaderViewFeatureTest {
         engineSession: EngineSession = mock(),
         controller: BuiltInWebExtensionController? = null,
         createUUID: UUIDCreator = { "" },
-        onListenClicked: (Result<ListenResult>) -> Unit = {},
     ): ReaderViewFeature {
         val engine: Engine = mock()
 
@@ -983,7 +835,6 @@ class ReaderViewFeatureTest {
                 mock(),
                 testDispatcher,
                 createUUID,
-                onListenClicked = onListenClicked,
             )
         feature.start()
         if (controller != null) {

@@ -120,6 +120,26 @@ export class AIWindowTabStatesManager {
   }
 
   /**
+   * Id of the conversation a tab has messages in, if any. A fresh chat tab
+   * already holds an empty conversation, which does not count. One whose
+   * messages have not been loaded yet (a restored tab) does, since it cannot
+   * be told apart from a conversation with messages.
+   *
+   * @param {MozTabbrowserTab} tab
+   * @returns {?string}
+   */
+  getTabConversationId(tab) {
+    const state = this.#tabStates.get(tab)?.state;
+    if (!state?.conversationId) {
+      return null;
+    }
+    if (state.conversation && !state.conversation.messageCount) {
+      return null;
+    }
+    return state.conversationId;
+  }
+
+  /**
    * Get the tab associated with a particular conversation, if there is one.
    *
    * @param {string} conversationId
@@ -538,7 +558,13 @@ export class AIWindowTabStatesManager {
 
     const tabState = this.#tabStates.get(tab) ?? {};
     if (saved?.conversationId) {
-      tabState.state = { ...(tabState.state ?? {}), ...saved };
+      const conversation = tabState.state?.conversation;
+      tabState.state = {
+        ...(tabState.state ?? {}),
+        ...saved,
+        conversation:
+          conversation?.id === saved.conversationId ? conversation : null,
+      };
       this.#tabStates.set(tab, tabState);
     }
     return tabState;
@@ -1099,13 +1125,11 @@ export class AIWindowTabStatesManager {
           !isSidebarOpen &&
           shouldKeepSidebarOpen
         ) {
-          lazy.AIWindowUI.openSidebar(
-            this.#window,
-            tabState.state.conversation
-          );
           tabState = this.#getTabState(tab, {
             input: EMPTY_SMARTBAR_INPUT_STATE,
           });
+          await this.#openSidebarForTab(tab, tabState);
+          return;
         }
 
         if (!isAiWindowUrl && lazy.AIWindowUI.isSidebarOpen(this.#window)) {
